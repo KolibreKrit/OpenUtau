@@ -47,6 +47,18 @@ namespace OpenUtau.App.Embedding {
         static TransportFunction? transport;
         const int playOrPause = 0, pause = 1, seek = 2;
 
+        /// <summary>OpenUtau renders the project ahead of playback when it loads and after each edit. A part
+        /// whose phonemes arrive after that render has started is left out of it, and OpenUtau's own playback
+        /// would render it on demand. The application plays the song instead, so OpenUtau renders again once
+        /// the phonemes arrive.</summary>
+        sealed class RenderWhenPhonemized : ICmdSubscriber {
+            public void OnNext(UCommand cmd, bool isUndo) {
+                if (cmd is PhonemizedNotification phonemized) {
+                    DocManager.Inst.ExecuteCmd(new PreRenderNotification(phonemized.part));
+                }
+            }
+        }
+
         static string? Utf8(IntPtr text) => text == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(text);
 
         static int Guard(string what, Action action) {
@@ -100,6 +112,7 @@ namespace OpenUtau.App.Embedding {
                 pianoRoll = new PianoRoll(t.Result);
                 pianoRoll.InitializePianoRollWindowAsync();
                 pianoRoll.ViewModel.PlaybackViewModel = new PlaybackViewModel();
+                DocManager.Inst.AddSubscriber(new RenderWhenPhonemized());
                 ready = true;
                 Log.Information("Embedded OpenUtau ready.");
                 if (root != null) {
