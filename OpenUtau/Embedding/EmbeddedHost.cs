@@ -253,11 +253,12 @@ namespace OpenUtau.App.Embedding {
             });
         }
 
-        /// <summary>Saves the project to its file if it has unsaved changes.</summary>
+        /// <summary>Saves the project to its file if it has unsaved changes. Returns 1 if the project has no file
+        /// or OpenUtau couldn't write it.</summary>
         [UnmanagedCallersOnly]
         public static int SaveProject() => Guard("save", () => {
-            if (ready && !DocManager.Inst.ChangesSaved) {
-                Save();
+            if (ready && !DocManager.Inst.ChangesSaved && !Save()) {
+                throw new IOException($"Couldn't save the project to \"{DocManager.Inst.Project.FilePath}\"");
             }
         });
 
@@ -265,11 +266,17 @@ namespace OpenUtau.App.Embedding {
         [UnmanagedCallersOnly]
         public static int HasChanges() => ready && !DocManager.Inst.ChangesSaved ? 1 : 0;
 
-        /// <summary>Saves the project to its file, as OpenUtau's Save does.</summary>
-        public static void Save() {
-            if (!string.IsNullOrEmpty(DocManager.Inst.Project.FilePath)) {
-                DocManager.Inst.ExecuteCmd(new SaveProjectNotification(""));
+        /// <summary>Saves the project to its file, as OpenUtau's Save does. False if the project has no file or
+        /// OpenUtau couldn't write it, which OpenUtau itself only reports in a message.</summary>
+        public static bool Save() {
+            var project = DocManager.Inst.Project;
+            if (string.IsNullOrEmpty(project.FilePath)) {
+                return false;
             }
+            // OpenUtau marks the project saved once it has written the file. Until then its changes stay unsaved.
+            project.Saved = false;
+            DocManager.Inst.ExecuteCmd(new SaveProjectNotification(""));
+            return project.Saved;
         }
 
         /// <summary>Dialogs need an owner window, and the embedded piano roll has none, so a
