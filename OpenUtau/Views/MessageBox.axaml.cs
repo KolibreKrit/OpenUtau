@@ -34,7 +34,7 @@ namespace OpenUtau.App.Views {
             string text = message;
             string title = ThemeManager.GetString("errors.caption");
             if (fromNotif) {
-                IReadOnlyList<Window> dialogs = ((IClassicDesktopStyleApplicationLifetime)Application.Current!.ApplicationLifetime!).Windows;
+                IReadOnlyList<Window> dialogs = (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.Windows ?? Array.Empty<Window>();
                 foreach (var dialog in dialogs) {
                     if (dialog.IsActive) {
                         parent = dialog;

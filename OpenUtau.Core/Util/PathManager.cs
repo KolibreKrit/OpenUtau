@@ -13,9 +13,19 @@ using Serilog;
 namespace OpenUtau.Core {
 
     public class PathManager : SingletonBase<PathManager> {
+        /// <summary>Set before first use to keep OpenUtau's data and cache elsewhere, as when
+        /// another application hosts OpenUtau.</summary>
+        public static string? DataPathOverride { get; set; }
+        public static string? CachePathOverride { get; set; }
+
         public PathManager() {
-            RootPath = Path.GetDirectoryName(Assembly.GetEntryAssembly().Location);
-            if (OS.IsMacOS()) {
+            // A hosting application has no managed entry assembly.
+            RootPath = Path.GetDirectoryName(Assembly.GetEntryAssembly()?.Location ?? AppContext.BaseDirectory);
+            if (!string.IsNullOrEmpty(DataPathOverride)) {
+                DataPath = DataPathOverride;
+                CachePath = string.IsNullOrEmpty(CachePathOverride) ? Path.Combine(DataPath, "Cache") : CachePathOverride;
+                HomePathIsAscii = true;
+            } else if (OS.IsMacOS()) {
                 string userHome = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
                 DataPath = Path.Combine(userHome, "Library", "OpenUtau");
                 CachePath = Path.Combine(userHome, "Library", "Caches", "OpenUtau");

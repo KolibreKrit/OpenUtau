@@ -51,6 +51,9 @@ namespace OpenUtau.App.ViewModels {
             DocManager.Inst.ExecuteCmd(new SeekPlayPosTickNotification(Project.EndTick));
         }
         public void PlayOrPause(int tick = -1, int endTick = -1, int trackNo = -1) {
+            if (Embedding.EmbeddedHost.PlayOrPause(tick)) {
+                return;
+            }
             PlaybackManager.Inst.PlayOrPause(tick: tick, endTick: endTick, trackNo: trackNo);
             var lockStartTime = Convert.ToBoolean(Preferences.Default.LockStartTime);
             if (!PlaybackManager.Inst.OutputActive && !PlaybackManager.Inst.StartingToPlay && lockStartTime) {
@@ -58,12 +61,16 @@ namespace OpenUtau.App.ViewModels {
             }
         }
         public void Pause() {
+            if (Embedding.EmbeddedHost.Pause()) {
+                return;
+            }
             PlaybackManager.Inst.PausePlayback();
         }
 
         public void MovePlayPos(int tick) {
             if (DocManager.Inst.playPosTick != tick) {
                 DocManager.Inst.ExecuteCmd(new SeekPlayPosTickNotification(Math.Max(0, tick)));
+                Embedding.EmbeddedHost.Seek(Math.Max(0, tick));
             }
         }
 

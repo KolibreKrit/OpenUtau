@@ -48,7 +48,8 @@ namespace OpenUtau.App.Controls {
         private ReactiveCommand<RxVoid, RxVoid>? noteDefaultsCommand;
         private ReactiveCommand<BatchEdit, RxVoid>? noteBatchEditCommand;
 
-        private Window RootWindow => (Window)TopLevel.GetTopLevel(this)!;
+        private Window RootWindow => TopLevel.GetTopLevel(this) as Window ?? Embedding.EmbeddedHost.DialogOwner();
+        private TopLevel? RootTopLevel => TopLevel.GetTopLevel(this);
 
         private readonly ValueGlide hScroll;
         private readonly ValueGlide vScroll;
@@ -1532,13 +1533,13 @@ namespace OpenUtau.App.Controls {
                 return;
             }
 
-            if (RootWindow.FocusManager != null) {
-                if (RootWindow.FocusManager.GetFocusedElement() is TextBox focusedTextBox) {
+            if (RootTopLevel?.FocusManager != null) {
+                if (RootTopLevel.FocusManager.GetFocusedElement() is TextBox focusedTextBox) {
                     if (focusedTextBox.IsEnabled && focusedTextBox.IsEffectivelyVisible && focusedTextBox.IsFocused) {
                         args.Handled = false;
                         return;
                     }
-                } else if (RootWindow.FocusManager.GetFocusedElement() is ComboBox or ComboBoxItem) {
+                } else if (RootTopLevel.FocusManager.GetFocusedElement() is ComboBox or ComboBoxItem) {
                     args.Handled = false;
                     return;
                 }
@@ -2009,7 +2010,11 @@ namespace OpenUtau.App.Controls {
                         return true;
                     }
                     if (isCtrl) {
-                        _ = MainWindow?.Save();
+                        if (MainWindow != null) {
+                            _ = MainWindow.Save();
+                        } else {
+                            Embedding.EmbeddedHost.Save();
+                        }
                         return true;
                     }
                     // solo

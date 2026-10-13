@@ -17,6 +17,9 @@ using Serilog;
 
 namespace OpenUtau.App {
     public class App : Application {
+        /// <summary>True when another application hosts OpenUtau's views, with no OpenUtau windows.</summary>
+        public static bool Embedded { get; set; }
+
         public override void Initialize() {
             Log.Information("Initializing application.");
             AvaloniaXamlLoader.Load(this);
@@ -31,7 +34,7 @@ namespace OpenUtau.App {
         public override void OnFrameworkInitializationCompleted() {
             Log.Information("Framework initialization completed.");
             RegisterUnhandledExceptionHandlers();
-            if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
+            if (!Embedded && ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop) {
                 desktop.MainWindow = new SplashWindow();
             }
 
