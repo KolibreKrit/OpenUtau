@@ -87,16 +87,113 @@ namespace OpenUtau.Core.DawIntegration {
             if (!planner.IsPartReady(part, placements.Select(p => p.hash))) {
                 return false;
             }
-            if (!MixPlanner.TryGetPartPlacements(planner, part, placements, out var pcmList)) {
+            return TryMix(planner, part, placements, project.timeAxis.TickPosToMsPos(part.position),
+                project.timeAxis.TickPosToMsPos(part.End), out samples);
+        }
+
+        /// <summary>How far a voice part's audio has got, as <see cref="ReadPart"/> finds it.</summary>
+        public enum PartState {
+            /// <summary>Its phonemes, phrases or render aren't finished.</summary>
+            Rendering,
+            /// <summary>Every one of its current phrases has rendered.</summary>
+            Ready,
+            /// <summary>It has nothing to render: no phrases, or a muted track that OpenUtau is set to skip.</summary>
+            Silent,
+        }
+
+        /// <summary>A voice part's audio as <see cref="ReadPart"/> found it.</summary>
+        public sealed class PartAudio {
+            public PartState State { get; internal set; }
+            /// <summary>Names the audio <see cref="TryMix"/> gives, from the part's window and the hash and place of
+            /// each phrase, so the same phrases in the same window have the same key. 0 unless the part is ready.</summary>
+            public ulong Key { get; internal set; }
+            internal MixPlanner Planner = null!;
+            internal UPart Part = null!;
+            internal (ulong hash, double startMs, double endMs)[] Phrases = Array.Empty<(ulong, double, double)>();
+            internal double StartMs, EndMs;
+
+            /// <summary>The part's audio as <see cref="TryExtractPart(UProject, UVoicePart, out float[])"/> gives
+            /// it, from the phrases read. Safe on any thread. False if the part wasn't ready, or the planner has since
+            /// dropped a phrase's audio, as a failed render or clearing the phrase cache does.</summary>
+            public bool TryMix(out float[] samples) {
+                samples = Array.Empty<float>();
+                return State == PartState.Ready && DawAudio.TryMix(Planner, Part, Phrases, StartMs, EndMs, out samples);
+            }
+        }
+
+        /// <summary>
+        /// Reads where a voice part's audio has got without waiting for the phonemizer, a phrase build or a render.
+        /// Runs on the document thread once the project is validated, so the part's phonemes and phrases follow its
+        /// last edit. A part waiting for any of those is <see cref="PartState.Rendering"/>, and nothing tells when its
+        /// phrase build lands, so a caller waiting for it reads again.
+        /// </summary>
+        public static PartAudio ReadPart(UProject project, UVoicePart part, MixPlanner planner) {
+            var rendering = new PartAudio { State = PartState.Rendering };
+            if (Util.Preferences.Default.SkipRenderingMutedTracks
+                && part.trackNo >= 0 && part.trackNo < project.tracks.Count && project.tracks[part.trackNo].Muted) {
+                return new PartAudio { State = PartState.Silent };
+            }
+            if (!part.PhonemesUpToDate || !part.WaitPhraseSource(TimeSpan.Zero)) {
+                return rendering;
+            }
+            var phrases = part.GetRenderRequest().phrases;
+            var placements = new (ulong hash, double startMs, double endMs)[phrases.Length];
+            for (int i = 0; i < phrases.Length; ++i) {
+                (placements[i].startMs, placements[i].endMs) = phrases[i].Layout.Range;
+                placements[i].hash = phrases[i].hash;
+            }
+            return ReadPart(planner, part, placements,
+                project.timeAxis.TickPosToMsPos(part.position), project.timeAxis.TickPosToMsPos(part.End));
+        }
+
+        internal static PartAudio ReadPart(MixPlanner planner, UPart part,
+                (ulong hash, double startMs, double endMs)[] phrases, double startMs, double endMs) {
+            if (phrases.Length == 0) {
+                return new PartAudio { State = PartState.Silent };
+            }
+            // Until a render begins after an edit, the planner's session is the last render's, with every slot ready,
+            // so each phrase must also have audio of its own.
+            if (!planner.IsPartReady(part, phrases.Select(p => p.hash))
+                || !phrases.All(p => planner.TryGetPhrasePcm(part, p.hash, out _))) {
+                return new PartAudio { State = PartState.Rendering };
+            }
+            var key = new byte[16 + phrases.Length * 24];
+            BinaryPrimitives.WriteDoubleLittleEndian(key.AsSpan(0), startMs);
+            BinaryPrimitives.WriteDoubleLittleEndian(key.AsSpan(8), endMs);
+            for (int i = 0; i < phrases.Length; ++i) {
+                var at = key.AsSpan(16 + i * 24);
+                BinaryPrimitives.WriteUInt64LittleEndian(at, phrases[i].hash);
+                BinaryPrimitives.WriteDoubleLittleEndian(at.Slice(8), phrases[i].startMs);
+                BinaryPrimitives.WriteDoubleLittleEndian(at.Slice(16), phrases[i].endMs);
+            }
+            return new PartAudio {
+                State = PartState.Ready,
+                Key = XXH64.DigestOf(key),
+                Planner = planner,
+                Part = part,
+                Phrases = phrases,
+                StartMs = startMs,
+                EndMs = endMs,
+            };
+        }
+
+        static bool TryMix(MixPlanner planner, UPart part,
+                IEnumerable<(ulong hash, double startMs, double endMs)> placements, double startMs, double endMs,
+                out float[] samples) {
+            samples = Array.Empty<float>();
+            // A phrase whose audio the planner has dropped since, as a failed render or clearing the cache does, would
+            // leave a gap.
+            if (!MixPlanner.TryGetPartPlacements(planner, part, placements, out var pcmList)
+                || pcmList.Count != placements.Count()) {
                 return false;
             }
-            int start = MsToInterleavedIndex(project.timeAxis.TickPosToMsPos(part.position));
-            int end = MsToInterleavedIndex(project.timeAxis.TickPosToMsPos(part.End));
+            int start = MsToInterleavedIndex(startMs);
+            int end = MsToInterleavedIndex(endMs);
             int count = end - start;
             if (count <= 0) {
                 return false;
             }
-            // TryGetPartPcm returns only Ready placements, so this transient slot set
+            // TryGetPartPlacements returns only rendered placements, so this transient slot set
             // mixes like the finished part.
             var slots = new SampleSlot[pcmList.Count];
             for (int i = 0; i < pcmList.Count; i++) {

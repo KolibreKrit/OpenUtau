@@ -270,6 +270,36 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        [Fact]
+        public void TheMixSnapshotHasTheTracksTheUstxAndThePartsStillRendering() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, pianoRoll => {
+                DocManager.Inst.StartUndoGroup("test");
+                DocManager.Inst.ExecuteCmd(new ChangeNoteLyricCommand(first, first.notes.ElementAt(0), "la"));
+                DocManager.Inst.EndUndoGroup();
+                DocManager.Inst.FlushValidation();
+
+                var (text, rendering) = EmbeddedMix.Snapshot(project, true);
+
+                using var json = JsonDocument.Parse(text);
+                var root = json.RootElement;
+                Assert.Equal(2, root.GetProperty("tracks").GetArrayLength());
+                Assert.Equal("test", root.GetProperty("tracks")[0].GetProperty("singer").GetString());
+                // The edited part waits for its phonemes, and a part is listed only once it has audio.
+                Assert.InRange(rendering, 1, 3);
+                Assert.Equal(rendering, root.GetProperty("rendering").GetInt32());
+                Assert.Equal(3 - rendering, root.GetProperty("parts").GetArrayLength());
+                // The project has never been saved, and its USTX is written all the same.
+                Assert.False(root.GetProperty("saved").GetBoolean());
+                Assert.Contains("lyric: la", root.GetProperty("ustx").GetString());
+                Assert.Equal(string.Empty, project.FilePath);
+
+                using var unchanged = JsonDocument.Parse(EmbeddedMix.Snapshot(project, false).json);
+                Assert.False(unchanged.RootElement.TryGetProperty("ustx", out _));
+                Assert.Equal(2, EmbeddedMix.ReadAudio("1", out _));
+            });
+        }
+
         // Notes each phonemizer result in a log, between the listener's calls.
         sealed class PhonemesArrive : ICmdSubscriber {
             public readonly List<string> log;

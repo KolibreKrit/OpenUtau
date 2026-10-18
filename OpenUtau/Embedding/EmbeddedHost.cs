@@ -36,6 +36,7 @@ namespace OpenUtau.App.Embedding {
         static PianoRoll? pianoRoll;
         static Window? dialogOwner;
         static bool ready;
+        internal static bool Ready => ready;
         static string? pendingProject;
         // The last call to show a track or notes before OpenUtau was ready, run once it is.
         static Action? pendingView;
@@ -58,6 +59,12 @@ namespace OpenUtau.App.Embedding {
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         delegate void ListenerFunction(int change);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate void MixFunction(IntPtr utf8, int length);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate void SamplesFunction(IntPtr context, IntPtr samples, int frames);
         static Action<int>? listener;
         static TellChanges? tellChanges;
         // One bit for each change waiting to be told, so changes in quick succession are told once.
@@ -163,6 +170,7 @@ namespace OpenUtau.App.Embedding {
                 DocManager.Inst.AddSubscriber(new RenderWhenPhonemized());
                 ready = true;
                 Log.Information("Embedded OpenUtau ready.");
+                EmbeddedMix.Schedule();
                 if (root != null) {
                     root.Content = pianoRoll;
                     pianoRoll.Focus();
@@ -337,6 +345,73 @@ namespace OpenUtau.App.Embedding {
                 DocManager.Inst.AddSubscriber(tellChanges);
             }
         }
+
+        /// <summary>
+        /// Takes the function the project's snapshots go to in place of the DAW Integration, or null to stop. It is
+        /// called on the main thread with UTF-8 JSON, valid only during the call, once OpenUtau is ready and again
+        /// after each change, with nothing changed sent twice. The JSON has the project's <c>name</c> and whether it
+        /// is <c>saved</c>, its <c>tracks</c> as the DAW Integration's <c>updateTracks</c> gives them, and its
+        /// <c>parts</c> as <c>updatePartLayout</c> does. <c>ustx</c>, the project as OpenUtau saves it, is there after
+        /// a change to the project and left out otherwise. A part renders again after each edit to it. Until it has,
+        /// it is listed with its last audio, or left out if it has never rendered, and <c>rendering</c> counts it. A
+        /// part with no notes to sing is left out. <see cref="ReadPartAudio"/> gives each part's audio by its hash.
+        /// </summary>
+        [UnmanagedCallersOnly]
+        public static int SetMix(IntPtr function) => Guard("set mix", () => {
+            var native = function == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<MixFunction>(function);
+            EmbeddedMix.Listen(native == null ? null : json => {
+                var text = Encoding.UTF8.GetBytes(json);
+                var pinned = GCHandle.Alloc(text, GCHandleType.Pinned);
+                try {
+                    native(pinned.AddrOfPinnedObject(), text.Length);
+                } finally {
+                    pinned.Free();
+                }
+            });
+        });
+
+        /// <summary>Gives <paramref name="function"/> the audio of a part the last snapshot from <see cref="SetMix"/>
+        /// names by its hash, with <paramref name="context"/> passed back to it. The audio is the part's window as
+        /// <c>getAudio</c> gives it: stereo float samples, interleaved, at 44.1 kHz. The function is called once,
+        /// before this returns, with the number of sample frames, and the samples are valid only during the call.
+        /// Safe on any thread. Returns 0 once given, 2 if no part in the last snapshot has the hash or OpenUtau has since
+        /// dropped some of its audio, and 1 if it failed.</summary>
+        [UnmanagedCallersOnly]
+        public static int ReadPartAudio(IntPtr hash, IntPtr function, IntPtr context) {
+            int result = 0;
+            int failed = Guard("read part audio", () => {
+                var name = Utf8(hash) ?? throw new ArgumentNullException(nameof(hash));
+                if (function == IntPtr.Zero) {
+                    throw new ArgumentNullException(nameof(function));
+                }
+                result = EmbeddedMix.ReadAudio(name, out var samples);
+                if (result != 0) {
+                    return;
+                }
+                var receive = Marshal.GetDelegateForFunctionPointer<SamplesFunction>(function);
+                var pinned = GCHandle.Alloc(samples, GCHandleType.Pinned);
+                try {
+                    receive(context, pinned.AddrOfPinnedObject(), samples.Length / DawAudio.Channels);
+                } finally {
+                    pinned.Free();
+                }
+            });
+            return failed != 0 ? failed : result;
+        }
+
+        /// <summary>Moves OpenUtau's playhead to the application's play head, in milliseconds from the project's start,
+        /// as the DAW Integration's <c>playhead</c> does. Main thread.</summary>
+        [UnmanagedCallersOnly]
+        public static int SetPlayhead(double ms) => Guard("set playhead", () => {
+            if (!ready) {
+                return;
+            }
+            int tick = Math.Max(0, DocManager.Inst.Project.timeAxis.MsPosToTickPos(ms));
+            // A parked play head reported again after rounding leaves OpenUtau's where it is.
+            if (Math.Abs(tick - DocManager.Inst.playPosTick) >= DawManager.PlayheadEpsilonTicks) {
+                DocManager.Inst.ExecuteCmd(new SeekPlayPosTickNotification(tick));
+            }
+        });
 
         /// <summary>Connects OpenUtau's DAW Integration to the server a discovery file names.</summary>
         [UnmanagedCallersOnly]
