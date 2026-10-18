@@ -353,10 +353,12 @@ namespace OpenUtau.App.Embedding {
         /// is <c>saved</c>, its <c>tracks</c> as the DAW Integration's <c>updateTracks</c> gives them, and its
         /// <c>parts</c> as <c>updatePartLayout</c> does. <c>ustx</c>, the project as OpenUtau saves it, is there after
         /// a change to the project and left out otherwise. A part renders again after each edit to it. Until it has,
-        /// it is listed with its last audio, or left out if it has never rendered, and <c>rendering</c> counts it. If
-        /// OpenUtau's render pass failed, <c>failed</c> counts the parts it left in place of <c>rendering</c> until
-        /// another pass starts, as an edit, Undo or Redo starts one. The application's playback doesn't. A part with
-        /// no notes to sing is left out. <see cref="ReadPartAudio"/> gives each part's audio by its hash.
+        /// it is listed with its last audio and <c>outdated</c> true, or left out if it has never rendered, and
+        /// <c>rendering</c> counts it. If OpenUtau's render pass failed, <c>failed</c> counts the parts it left in
+        /// place of <c>rendering</c> until another pass starts, as an edit, Undo or Redo starts one. The application's
+        /// playback doesn't. A part whose audio is current has no <c>outdated</c>, and a part loses it once it has
+        /// rendered, even with the same audio as before, so the snapshot still changes. A part with no notes to sing
+        /// is left out. <see cref="ReadPartAudio"/> gives each part's audio by its hash.
         /// </summary>
         [UnmanagedCallersOnly]
         public static int SetMix(IntPtr function) => Guard("set mix", () => {

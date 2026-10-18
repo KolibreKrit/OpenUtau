@@ -15,14 +15,16 @@ namespace OpenUtau.App.Embedding {
     /// Hands the application the project, its tracks and each voice part's rendered audio as they change, in place of
     /// the DAW Integration's socket and its debounce. After each change the application gets a snapshot, and it reads
     /// the audio of each part it doesn't have yet by the hash the snapshot names. A part renders again after each edit
-    /// to it, and while it does the snapshot names its last audio, so the application keeps playing that.
+    /// to it, and while it does the snapshot names its last audio and marks it outdated, and the application keeps
+    /// playing that.
     /// </summary>
     public static class EmbeddedMix {
         /// <summary>Edits come in bursts, such as a note dragged, and the USTX takes a while to write, so a snapshot
         /// with a new USTX waits this long after the last one.</summary>
         static readonly TimeSpan ustxInterval = TimeSpan.FromMilliseconds(100);
-        /// <summary>Nothing tells when a phrase build lands, so while a part renders the parts are read again this
-        /// often.</summary>
+        /// <summary>Nothing tells when a phrase build lands, so while a part waits for its render the parts are read
+        /// again this often. A part a failed pass left counts too, as a build can still land and make it current or
+        /// leave it nothing to sing.</summary>
         static readonly TimeSpan renderingInterval = TimeSpan.FromMilliseconds(250);
 
         static Action<string>? receiver;
@@ -33,7 +35,7 @@ namespace OpenUtau.App.Embedding {
         static bool renderFailed;
         static DateTime ustxSentAt = DateTime.MinValue;
         static string? lastSent;
-        // The last audio each part rendered, which the snapshot names while it renders again.
+        // The last audio each part rendered, which the snapshot names, marked outdated, while it renders again.
         static readonly Dictionary<UVoicePart, DawAudio.PartAudio> rendered = new();
         // The audio the last snapshot named, by hash, which ReadAudio may be asked for from any thread.
         static readonly object namedLock = new();
@@ -107,11 +109,11 @@ namespace OpenUtau.App.Embedding {
                 return;
             }
             string json;
-            int rendering;
+            int waiting;
             try {
                 // An edit OpenUtau validates later would leave its part looking up to date until then.
                 DocManager.Inst.FlushValidation();
-                (json, rendering) = Snapshot(DocManager.Inst.Project, documentChanged);
+                (json, waiting) = Snapshot(DocManager.Inst.Project, documentChanged);
             } catch (Exception e) {
                 Log.Error(e, "Embedded OpenUtau couldn't read its parts");
                 return;
@@ -120,7 +122,7 @@ namespace OpenUtau.App.Embedding {
                 documentChanged = false;
                 ustxSentAt = DateTime.UtcNow;
             }
-            if (rendering > 0 && !polling) {
+            if (waiting > 0 && !polling) {
                 polling = true;
                 DispatcherTimer.RunOnce(() => {
                     polling = false;
@@ -134,9 +136,9 @@ namespace OpenUtau.App.Embedding {
             receiver(json);
         }
 
-        /// <summary>The snapshot <see cref="EmbeddedHost.SetMix"/> describes, and how many parts are rendering.
-        /// Parts a failed render pass left are counted as failed, not rendering.</summary>
-        public static (string json, int rendering) Snapshot(UProject project, bool withUstx) {
+        /// <summary>The snapshot <see cref="EmbeddedHost.SetMix"/> describes, and how many parts wait for a render:
+        /// those it counts as rendering, or as failed if a failed render pass left them.</summary>
+        public static (string json, int waiting) Snapshot(UProject project, bool withUstx) {
             var planner = PlaybackManager.Inst.MixPlanner;
             var now = new Dictionary<string, DawAudio.PartAudio>();
             var parts = project.parts.OfType<UVoicePart>().OrderBy(p => p.trackNo).ThenBy(p => p.position).ToList();
@@ -168,12 +170,14 @@ namespace OpenUtau.App.Embedding {
                 json.WriteStartArray("parts");
                 foreach (var part in parts) {
                     var audio = DawAudio.ReadPart(project, part, planner);
+                    bool outdated = false;
                     if (audio.State == DawAudio.PartState.Ready) {
                         rendered[part] = audio;
                     } else if (audio.State == DawAudio.PartState.Silent) {
                         rendered.Remove(part);
                     } else {
                         ++rendering;
+                        outdated = true;
                     }
                     if (!rendered.TryGetValue(part, out var heard)) {
                         continue;
@@ -185,6 +189,10 @@ namespace OpenUtau.App.Embedding {
                     json.WriteNumber("startMs", project.timeAxis.TickPosToMsPos(part.position));
                     json.WriteNumber("endMs", project.timeAxis.TickPosToMsPos(part.End));
                     json.WriteString("audioHash", hash);
+                    // Once it renders again it loses this, even with the same audio, so the snapshot changes.
+                    if (outdated) {
+                        json.WriteBoolean("outdated", true);
+                    }
                     json.WriteEndObject();
                 }
                 json.WriteEndArray();
@@ -195,7 +203,7 @@ namespace OpenUtau.App.Embedding {
             lock (namedLock) {
                 named = now;
             }
-            return (System.Text.Encoding.UTF8.GetString(stream.ToArray()), renderFailed ? 0 : rendering);
+            return (System.Text.Encoding.UTF8.GetString(stream.ToArray()), rendering);
         }
 
         /// <summary>The project as OpenUtau saves it, or null if it can't be written.</summary>
