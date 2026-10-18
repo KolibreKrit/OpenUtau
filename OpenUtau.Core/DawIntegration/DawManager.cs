@@ -267,6 +267,12 @@ namespace OpenUtau.Core.DawIntegration {
         private double lastDawBpm = double.NaN;
         private double lastWarnedProjectBpm = double.NaN;
 
+        /// <summary>
+        /// The FilePath of the last USTX serialized for the plugins, or null if none has been
+        /// since the open project loaded. Document thread only.
+        /// </summary>
+        private string? ustxFilePath;
+
         public DawManager() : this(null) { }
 
         public DawManager(
@@ -447,7 +453,7 @@ namespace OpenUtau.Core.DawIntegration {
         /// mutate the project, so it has to happen on the document thread.
         /// </summary>
         private Task<string> SerializeProjectAsync() {
-            return OnDocumentThreadAsync(() => DawUstx.Serialize(ProjectSource()));
+            return OnDocumentThreadAsync(() => Serialize(ProjectSource()));
         }
 
         /// <summary>
@@ -457,8 +463,14 @@ namespace OpenUtau.Core.DawIntegration {
         private Task<string?> SerializeSavedProjectAsync() {
             return OnDocumentThreadAsync(() => {
                 var project = ProjectSource();
-                return string.IsNullOrEmpty(project.FilePath) ? null : DawUstx.Serialize(project);
+                return string.IsNullOrEmpty(project.FilePath) ? null : Serialize(project);
             });
+        }
+
+        private string Serialize(UProject project) {
+            string ustx = DawUstx.Serialize(project);
+            ustxFilePath = project.FilePath;
+            return ustx;
         }
 
         /// <summary>
@@ -570,12 +582,17 @@ namespace OpenUtau.Core.DawIntegration {
                     lock (stateLock) {
                         hashOwners.Clear();
                     }
+                    ustxFilePath = null;
                     scheduler.RequestFullSync(now);
                     break;
                 case SaveProjectNotification:
-                    // Saving for the first time is what turns an unsaved project syncable, and
-                    // the file name is what the plugins' info windows show.
-                    scheduler.Touch(DawSyncKind.ProjectInfo, now);
+                    if (ProjectSource().FilePath != ustxFilePath) {
+                        // A first save, or a save under a new path: the plugins hold no USTX
+                        // for this file, or one whose relative paths are now wrong.
+                        scheduler.RequestFullSync(now);
+                    } else {
+                        scheduler.Touch(DawSyncKind.ProjectInfo, now);
+                    }
                     break;
                 case UNotification:
                     // Transient UI state — play position, selection, progress. Not project data.

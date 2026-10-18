@@ -376,6 +376,9 @@ updateUstx → updateTracks → updateProjectInfo → updatePartLayout (+ audio 
   connected (a new project, or one made from a template), OpenUtau sends no `updateUstx`
   until it is saved. `updateTracks`, `updateProjectInfo` (`saved` `false`) and
   `updatePartLayout` still go out.
+- **Saving:** a first save, or a save under a new path, sends a full sync in the order
+  above, because the USTX's relative paths depend on where the file is. Saving again under
+  the same path sends only `updateProjectInfo`.
 - **Failures:** a stream that OpenUtau fails to build is skipped, and the streams due with
   it still go out. The skipped stream is sent again on its next change.
 

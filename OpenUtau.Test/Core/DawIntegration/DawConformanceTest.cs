@@ -418,6 +418,58 @@ namespace OpenUtau.Core.DawIntegration {
             Assert.Equal(new[] { DawMessageKind.UpdatePartLayout }, plugin.Received.Skip(before).ToArray());
         }
 
+        [Fact]
+        public async Task FirstSaveSendsEveryStream() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            NewProject(openutau);
+            await openutau.PumpOnceAsync();
+            int before = plugin.Received.Count;
+
+            Save(openutau, Path.Combine(directory, "first.ustx"));
+            await openutau.PumpOnceAsync();
+
+            Assert.Equal(
+                new[] { DawMessageKind.UpdateUstx, DawMessageKind.UpdateTracks, DawMessageKind.UpdateProjectInfo, DawMessageKind.UpdatePartLayout },
+                plugin.Received.Skip(before).ToArray());
+            Assert.Equal(DawUstx.Serialize(project), plugin.Ustx);
+            Assert.True(plugin.ProjectInfo!.Saved);
+            Assert.Equal("first", plugin.ProjectInfo.Name);
+        }
+
+        [Fact]
+        public async Task SavingUnderTheSamePathSendsOnlyProjectInfo() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            int before = plugin.Received.Count;
+
+            Save(openutau, project.FilePath);
+            now += DawSyncScheduler.DefaultSlowDebounce;
+            await openutau.PumpOnceAsync();
+            await plugin.WaitForCountAsync(DawMessageKind.UpdateProjectInfo, 2);
+
+            Assert.Equal(new[] { DawMessageKind.UpdateProjectInfo }, plugin.Received.Skip(before).ToArray());
+        }
+
+        /// <summary>Save As: the wave part's path in the USTX is relative to the new file.</summary>
+        [Fact]
+        public async Task SavingUnderANewPathSendsEveryStream() {
+            project.parts.Add(new UWavePart { trackNo = 0, FilePath = Path.Combine(directory, "vocal.wav") });
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            int before = plugin.Received.Count;
+
+            Save(openutau, Path.Combine(directory, "renamed.ustx"));
+            await openutau.PumpOnceAsync();
+
+            Assert.Equal(
+                new[] { DawMessageKind.UpdateUstx, DawMessageKind.UpdateTracks, DawMessageKind.UpdateProjectInfo, DawMessageKind.UpdatePartLayout },
+                plugin.Received.Skip(before).ToArray());
+            Assert.Equal(DawUstx.Serialize(project), plugin.Ustx);
+            Assert.Contains("relative_path: vocal.wav", plugin.Ustx);
+            Assert.Equal("renamed", plugin.ProjectInfo!.Name);
+        }
+
         /// <summary>
         /// A wave part with no file cannot be made relative to the project, so the USTX, the
         /// first stream sent, fails to serialize while every other stream still builds.
@@ -430,6 +482,12 @@ namespace OpenUtau.Core.DawIntegration {
         private void NewProject(DawManager openutau) {
             project = Format.Ustx.Create();
             openutau.OnNext(new LoadProjectNotification(project), false);
+        }
+
+        /// <summary>A save as <c>DocManager</c> runs it, without writing the file: the path is set before subscribers hear of it.</summary>
+        private void Save(DawManager openutau, string path) {
+            project.FilePath = path;
+            openutau.OnNext(new SaveProjectNotification(path), false);
         }
 
         private void AssertPulledMatchesPart(DawPartLayout advertised, UVoicePart part) {
