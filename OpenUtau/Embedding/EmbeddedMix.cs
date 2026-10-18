@@ -15,7 +15,8 @@ namespace OpenUtau.App.Embedding {
     /// Hands the application the project, its tracks and each voice part's rendered audio as they change, in place of
     /// the DAW Integration's socket and its debounce. After each change the application gets a snapshot, and it reads
     /// the audio of each part it doesn't have yet by the hash the snapshot names. A part renders again after each edit
-    /// to it, and while it does the snapshot names its last audio, so the application keeps playing that.
+    /// to it, and while it does the snapshot names its last audio and marks it outdated, and the application keeps
+    /// playing that.
     /// </summary>
     public static class EmbeddedMix {
         /// <summary>Edits come in bursts, such as a note dragged, and the USTX takes a while to write, so a snapshot
@@ -33,7 +34,7 @@ namespace OpenUtau.App.Embedding {
         static bool renderFailed;
         static DateTime ustxSentAt = DateTime.MinValue;
         static string? lastSent;
-        // The last audio each part rendered, which the snapshot names while it renders again.
+        // The last audio each part rendered, which the snapshot names, marked outdated, while it renders again.
         static readonly Dictionary<UVoicePart, DawAudio.PartAudio> rendered = new();
         // The audio the last snapshot named, by hash, which ReadAudio may be asked for from any thread.
         static readonly object namedLock = new();
@@ -168,12 +169,14 @@ namespace OpenUtau.App.Embedding {
                 json.WriteStartArray("parts");
                 foreach (var part in parts) {
                     var audio = DawAudio.ReadPart(project, part, planner);
+                    bool outdated = false;
                     if (audio.State == DawAudio.PartState.Ready) {
                         rendered[part] = audio;
                     } else if (audio.State == DawAudio.PartState.Silent) {
                         rendered.Remove(part);
                     } else {
                         ++rendering;
+                        outdated = true;
                     }
                     if (!rendered.TryGetValue(part, out var heard)) {
                         continue;
@@ -185,6 +188,10 @@ namespace OpenUtau.App.Embedding {
                     json.WriteNumber("startMs", project.timeAxis.TickPosToMsPos(part.position));
                     json.WriteNumber("endMs", project.timeAxis.TickPosToMsPos(part.End));
                     json.WriteString("audioHash", hash);
+                    // Once it renders again it loses this, even with the same audio, so the snapshot changes.
+                    if (outdated) {
+                        json.WriteBoolean("outdated", true);
+                    }
                     json.WriteEndObject();
                 }
                 json.WriteEndArray();

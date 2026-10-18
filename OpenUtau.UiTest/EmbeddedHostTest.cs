@@ -4,11 +4,13 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Tasks;
 using Avalonia.Controls;
 using OpenUtau.App.Controls;
 using OpenUtau.App.Embedding;
 using OpenUtau.App.ViewModels;
 using OpenUtau.Core;
+using OpenUtau.Core.Render;
 using OpenUtau.Core.Ustx;
 using Xunit;
 
@@ -30,6 +32,62 @@ namespace OpenUtau.UiTest {
             // Without a singer, OpenUtau phonemizes to nothing. Missing, a singer's lyrics are sung as they are.
             foreach (var track in project.tracks) {
                 track.Singer = USinger.CreateMissing("test");
+            }
+            return project;
+        }
+
+        // A singer with no voicebank that has an oto for every lyric, so its notes become phrases to render.
+        sealed class TestSinger : USinger {
+            public TestSinger() {
+                found = true;
+                loaded = true;
+            }
+            public override string Id => "test";
+            public override string Name => "test";
+            public override USingerType SingerType => USingerType.Classic;
+            public override IList<USubbank> Subbanks { get; } = new List<USubbank>();
+            public override bool TryGetOto(string phoneme, out UOto oto) {
+                oto = new UOto();
+                return true;
+            }
+            // The phonemizer sings each lyric as it is.
+            public override bool TryGetMappedOto(string phoneme, int tone, string color, out UOto oto) {
+                oto = default!;
+                return false;
+            }
+        }
+
+        // Renders each phrase as silence, at once.
+        sealed class SilentRenderer : IRenderer {
+            public const string Name = "SILENT";
+            public USingerType SingerType => USingerType.Classic;
+            public bool SupportsExpression(UExpressionDescriptor descriptor) => false;
+            public RenderResult Layout(RenderPhrase phrase) => new() {
+                leadingMs = phrase.leadingMs,
+                positionMs = phrase.positionMs,
+                estimatedLengthMs = phrase.leadingMs + phrase.durationMs,
+            };
+            public Task<RenderResult> Render(RenderPhrase phrase, Progress progress, int trackNo,
+                    CancellationTokenSource cancellation, bool isPreRender = false,
+                    RenderPhraseEvents? renderEvents = null) {
+                var result = Layout(phrase);
+                result.samples = new float[(int)(result.estimatedLengthMs * 44100 / 1000)];
+                return Task.FromResult(result);
+            }
+            public RenderPitchResult LoadRenderedPitch(RenderPhrase phrase) => new();
+            public UExpressionDescriptor[] GetSuggestedExpressions(USinger singer, URenderSettings renderSettings) =>
+                Array.Empty<UExpressionDescriptor>();
+            public override string ToString() => Name;
+        }
+
+        // Gives each track the singer and renderer above, so OpenUtau renders the project's parts.
+        static UProject Renderable(UProject project) {
+            foreach (var track in project.tracks) {
+                track.Singer = new TestSinger();
+                track.RendererSettings = new URenderSettings {
+                    renderer = SilentRenderer.Name,
+                    Renderer = new SilentRenderer(),
+                };
             }
             return project;
         }
@@ -92,6 +150,43 @@ namespace OpenUtau.UiTest {
                 HeadlessUi.Flush();
             }
         }
+
+        static JsonElement Snapshot(UProject project) {
+            using var json = JsonDocument.Parse(EmbeddedMix.Snapshot(project, false).json);
+            return json.RootElement.Clone();
+        }
+
+        // Reads snapshots, as the application gets them while OpenUtau renders, until no part is rendering or failed.
+        static JsonElement Rendered(UProject project) {
+            var clock = Stopwatch.StartNew();
+            while (true) {
+                var snapshot = Snapshot(project);
+                if (snapshot.GetProperty("rendering").GetInt32() == 0
+                    && snapshot.GetProperty("failed").GetInt32() == 0) {
+                    return snapshot;
+                }
+                Assert.True(clock.Elapsed < TimeSpan.FromSeconds(20), $"Parts didn't render: {snapshot}");
+                Thread.Sleep(10);
+                HeadlessUi.Flush();
+            }
+        }
+
+        // Starts a render pass once the phonemes are in, as an edit does, and waits for every part to render.
+        static JsonElement RenderAll(UProject project) {
+            WaitForPhonemes(project);
+            DocManager.Inst.ExecuteCmd(new PreRenderNotification());
+            return Rendered(project);
+        }
+
+        static void ChangeLyric(UVoicePart part, string lyric) {
+            DocManager.Inst.StartUndoGroup("test");
+            DocManager.Inst.ExecuteCmd(new ChangeNoteLyricCommand(part, part.notes.ElementAt(0), lyric));
+            DocManager.Inst.EndUndoGroup();
+            DocManager.Inst.FlushValidation();
+        }
+
+        // A part whose audio is current has no "outdated" at all.
+        static void AssertCurrent(JsonElement part) => Assert.False(part.TryGetProperty("outdated", out _));
 
         static void AssertShown(NotesViewModel notesVm, IEnumerable<UNote> notes) {
             foreach (var note in notes) {
@@ -302,27 +397,89 @@ namespace OpenUtau.UiTest {
 
         [Fact]
         public void PartsAFailedRenderLeftAreFailedUntilTheNextPass() {
-            var project = Project(out var first, out _);
+            var project = Renderable(Project(out var first, out _));
             WithPianoRoll(project, first, pianoRoll => {
                 EmbeddedMix.Listen(null);
-                DocManager.Inst.StartUndoGroup("test");
-                DocManager.Inst.ExecuteCmd(new ChangeNoteLyricCommand(first, first.notes.ElementAt(0), "la"));
-                DocManager.Inst.EndUndoGroup();
-                DocManager.Inst.FlushValidation();
-                int Count(string name) => JsonDocument.Parse(EmbeddedMix.Snapshot(project, false).json).RootElement.GetProperty(name).GetInt32();
-                int waiting = Count("rendering");
-                Assert.True(waiting > 0);
+                var before = RenderAll(project).GetProperty("parts")[0].GetProperty("audioHash").GetString();
+                int Count(string name) => Snapshot(project).GetProperty(name).GetInt32();
+                var prefs = Core.Util.Preferences.Default;
+                bool preRender = prefs.PreRender;
+                // No pass starts for the edit, so its part waits as one a failed pass left would.
+                prefs.PreRender = false;
+                try {
+                    ChangeLyric(first, "la");
+                    int waiting = Count("rendering");
+                    Assert.True(waiting > 0);
 
-                DocManager.Inst.ExecuteCmd(new ToastNotification("Pianoroll", "Failed to pre-render.", "errors.failed.prerender"));
-                HeadlessUi.Flush();
+                    DocManager.Inst.ExecuteCmd(new ToastNotification("Pianoroll", "Failed to pre-render.", "errors.failed.prerender"));
+                    HeadlessUi.Flush();
 
-                Assert.Equal((0, waiting), (Count("rendering"), Count("failed")));
-                Assert.Equal(0, EmbeddedMix.Snapshot(project, false).rendering);
+                    var failed = Snapshot(project);
+                    Assert.Equal((0, waiting), (failed.GetProperty("rendering").GetInt32(), failed.GetProperty("failed").GetInt32()));
+                    Assert.Equal(0, EmbeddedMix.Snapshot(project, false).rendering);
+                    // The part the pass left keeps its last audio, marked outdated.
+                    var left = failed.GetProperty("parts")[0];
+                    Assert.Equal(before, left.GetProperty("audioHash").GetString());
+                    Assert.True(left.GetProperty("outdated").GetBoolean());
+                } finally {
+                    prefs.PreRender = preRender;
+                }
 
                 DocManager.Inst.ExecuteCmd(new PreRenderNotification());
                 HeadlessUi.Flush();
 
                 Assert.Equal(0, Count("failed"));
+                var rendered = Rendered(project).GetProperty("parts")[0];
+                Assert.NotEqual(before, rendered.GetProperty("audioHash").GetString());
+                AssertCurrent(rendered);
+            });
+        }
+
+        [Fact]
+        public void AnEditedPartIsOutdatedUntilItRendersAgain() {
+            var project = Renderable(Project(out var first, out _));
+            WithPianoRoll(project, first, pianoRoll => {
+                EmbeddedMix.Listen(null);
+                var parts = RenderAll(project).GetProperty("parts");
+                Assert.Equal(3, parts.GetArrayLength());
+                Assert.All(parts.EnumerateArray(), AssertCurrent);
+                var before = parts[0].GetProperty("audioHash").GetString();
+
+                ChangeLyric(first, "la");
+
+                // Only the edited part is outdated, and it keeps its last audio until the new audio is in.
+                parts = Snapshot(project).GetProperty("parts");
+                Assert.Equal(3, parts.GetArrayLength());
+                Assert.Equal(before, parts[0].GetProperty("audioHash").GetString());
+                Assert.True(parts[0].GetProperty("outdated").GetBoolean());
+                AssertCurrent(parts[1]);
+                AssertCurrent(parts[2]);
+
+                var rendered = Rendered(project).GetProperty("parts")[0];
+                Assert.NotEqual(before, rendered.GetProperty("audioHash").GetString());
+                AssertCurrent(rendered);
+            });
+        }
+
+        [Fact]
+        public void AnEditUndoneBeforeItRendersLeavesThePartCurrentWithTheSameAudio() {
+            var project = Renderable(Project(out var first, out _));
+            WithPianoRoll(project, first, pianoRoll => {
+                EmbeddedMix.Listen(null);
+                var before = RenderAll(project).GetProperty("parts")[0].GetProperty("audioHash").GetString();
+
+                ChangeLyric(first, "la");
+                var outdated = Snapshot(project).GetProperty("parts")[0];
+                Assert.Equal(before, outdated.GetProperty("audioHash").GetString());
+                Assert.True(outdated.GetProperty("outdated").GetBoolean());
+                DocManager.Inst.Undo();
+
+                // The part names the same audio as it did while outdated, and its entry still changes, so a snapshot
+                // that differs from the last one sent tells the application the part is current again.
+                var current = Rendered(project).GetProperty("parts")[0];
+                Assert.Equal(before, current.GetProperty("audioHash").GetString());
+                AssertCurrent(current);
+                Assert.NotEqual(outdated.GetRawText(), current.GetRawText());
             });
         }
 
