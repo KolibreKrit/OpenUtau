@@ -300,6 +300,32 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        [Fact]
+        public void PartsAFailedRenderLeftAreFailedUntilTheNextPass() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, pianoRoll => {
+                EmbeddedMix.Listen(null);
+                DocManager.Inst.StartUndoGroup("test");
+                DocManager.Inst.ExecuteCmd(new ChangeNoteLyricCommand(first, first.notes.ElementAt(0), "la"));
+                DocManager.Inst.EndUndoGroup();
+                DocManager.Inst.FlushValidation();
+                int Count(string name) => JsonDocument.Parse(EmbeddedMix.Snapshot(project, false).json).RootElement.GetProperty(name).GetInt32();
+                int waiting = Count("rendering");
+                Assert.True(waiting > 0);
+
+                DocManager.Inst.ExecuteCmd(new ToastNotification("Pianoroll", "Failed to pre-render.", "errors.failed.prerender"));
+                HeadlessUi.Flush();
+
+                Assert.Equal((0, waiting), (Count("rendering"), Count("failed")));
+                Assert.Equal(0, EmbeddedMix.Snapshot(project, false).rendering);
+
+                DocManager.Inst.ExecuteCmd(new PreRenderNotification());
+                HeadlessUi.Flush();
+
+                Assert.Equal(0, Count("failed"));
+            });
+        }
+
         // Notes each phonemizer result in a log, between the listener's calls.
         sealed class PhonemesArrive : ICmdSubscriber {
             public readonly List<string> log;

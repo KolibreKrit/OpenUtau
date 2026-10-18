@@ -28,6 +28,9 @@ namespace OpenUtau.App.Embedding {
         static Action<string>? receiver;
         static Subscriber? subscriber;
         static bool scheduled, polling, documentChanged = true;
+        // OpenUtau's last render pass failed, so the parts it left unrendered wait for another pass, which an edit or
+        // a play starts.
+        static bool renderFailed;
         static DateTime ustxSentAt = DateTime.MinValue;
         static string? lastSent;
         // The last audio each part rendered, which the snapshot names while it renders again.
@@ -42,6 +45,13 @@ namespace OpenUtau.App.Embedding {
                     case LoadProjectNotification:
                         rendered.Clear();
                         documentChanged = true;
+                        renderFailed = false;
+                        break;
+                    case ToastNotification toast when toast.translationKey == "errors.failed.prerender":
+                        renderFailed = true;
+                        break;
+                    case PreRenderNotification:
+                        renderFailed = false;
                         break;
                     case VolumeChangeNotification:
                     case PanChangeNotification:
@@ -58,6 +68,7 @@ namespace OpenUtau.App.Embedding {
                         return;
                     default:
                         documentChanged = true;
+                        renderFailed = false;
                         break;
                 }
                 Schedule();
@@ -123,7 +134,8 @@ namespace OpenUtau.App.Embedding {
             receiver(json);
         }
 
-        /// <summary>The snapshot <see cref="EmbeddedHost.SetMix"/> describes, and how many parts are rendering.</summary>
+        /// <summary>The snapshot <see cref="EmbeddedHost.SetMix"/> describes, and how many parts are rendering.
+        /// Parts a failed render pass left are counted as failed, not rendering.</summary>
         public static (string json, int rendering) Snapshot(UProject project, bool withUstx) {
             var planner = PlaybackManager.Inst.MixPlanner;
             var now = new Dictionary<string, DawAudio.PartAudio>();
@@ -176,13 +188,14 @@ namespace OpenUtau.App.Embedding {
                     json.WriteEndObject();
                 }
                 json.WriteEndArray();
-                json.WriteNumber("rendering", rendering);
+                json.WriteNumber("rendering", renderFailed ? 0 : rendering);
+                json.WriteNumber("failed", renderFailed ? rendering : 0);
                 json.WriteEndObject();
             }
             lock (namedLock) {
                 named = now;
             }
-            return (System.Text.Encoding.UTF8.GetString(stream.ToArray()), rendering);
+            return (System.Text.Encoding.UTF8.GetString(stream.ToArray()), renderFailed ? 0 : rendering);
         }
 
         /// <summary>The project as OpenUtau saves it, or null if it can't be written.</summary>
