@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -20,6 +21,7 @@ using OpenUtau.Classic;
 using OpenUtau.Core;
 using OpenUtau.Core.DawIntegration;
 using OpenUtau.Core.Ustx;
+using ReactiveUI;
 using Serilog;
 
 namespace OpenUtau.App.Embedding {
@@ -34,7 +36,8 @@ namespace OpenUtau.App.Embedding {
         static Window? dialogOwner;
         static bool ready;
         static string? pendingProject;
-        static int pendingTrack = -1;
+        // The last call to show a track or notes before OpenUtau was ready, run once it is.
+        static Action? pendingView;
         static string? pendingServer;
         static readonly TextBlock status = new() {
             Text = "Starting OpenUtau…",
@@ -47,6 +50,17 @@ namespace OpenUtau.App.Embedding {
         static TransportFunction? transport;
         const int playOrPause = 0, pause = 1, seek = 2;
 
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate void TextFunction(IntPtr context, IntPtr utf8, int length);
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate void ListenerFunction(int change);
+        static Action<int>? listener;
+        static TellChanges? tellChanges;
+        // One bit for each change waiting to be told, so changes in quick succession are told once.
+        static int untold;
+        const int phonemesChanged = 0;
+
         /// <summary>OpenUtau renders the project ahead of playback when it loads and after each edit. A part
         /// whose phonemes arrive after that render has started is left out of it, and OpenUtau's own playback
         /// would render it on demand. The application plays the song instead, so OpenUtau renders again once
@@ -57,6 +71,37 @@ namespace OpenUtau.App.Embedding {
                     DocManager.Inst.ExecuteCmd(new PreRenderNotification(phonemized.part));
                 }
             }
+        }
+
+        /// <summary>Tells the application when what <see cref="ReadPhonemes"/> reports may have changed. Edits
+        /// that change what OpenUtau sings, such as tempo or expressions, phonemize again, so they are told when
+        /// the phonemes arrive. Vibrato changes nothing reported.</summary>
+        sealed class TellChanges : ICmdSubscriber {
+            public void OnNext(UCommand cmd, bool isUndo) {
+                if (cmd is PhonemizedNotification || cmd is LoadProjectNotification
+                    || cmd is TrackCommand || cmd is PartCommand
+                    || cmd is NoteCommand && cmd is not VibratoCommand) {
+                    Tell(phonemesChanged);
+                }
+            }
+        }
+
+        static void Tell(int change) {
+            if (listener == null) {
+                return;
+            }
+            // Only a change with nothing else waiting posts, and the post tells all that wait by then.
+            if (Interlocked.Or(ref untold, 1 << change) != 0) {
+                return;
+            }
+            Dispatcher.UIThread.Post(() => {
+                int changes = Interlocked.Exchange(ref untold, 0);
+                for (int i = 0; i < 31; ++i) {
+                    if ((changes & (1 << i)) != 0) {
+                        listener?.Invoke(i);
+                    }
+                }
+            });
         }
 
         static string? Utf8(IntPtr text) => text == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(text);
@@ -122,9 +167,9 @@ namespace OpenUtau.App.Embedding {
                 if (pendingProject != null) {
                     LoadProject(pendingProject);
                 }
-                if (pendingTrack >= 0) {
-                    ShowTrack(pendingTrack);
-                }
+                var view = pendingView;
+                pendingView = null;
+                view?.Invoke();
                 if (pendingServer != null) {
                     ConnectTo(pendingServer);
                 }
@@ -176,7 +221,7 @@ namespace OpenUtau.App.Embedding {
         [UnmanagedCallersOnly]
         public static int CloseProject() => Guard("close project", () => {
             pendingProject = null;
-            pendingTrack = -1;
+            pendingView = null;
             if (ready) {
                 DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
                 DocManager.Inst.Recovered = false;
@@ -190,9 +235,103 @@ namespace OpenUtau.App.Embedding {
             if (ready) {
                 ShowTrack(trackNo);
             } else {
-                pendingTrack = trackNo;
+                pendingView = () => ShowTrack(trackNo);
             }
         });
+
+        /// <summary>Shows a track's notes in the piano roll, named by their start ticks from the project's start.
+        /// It opens the part holding the first note found, scrolls as the application's SynthV script does, so the
+        /// notes start a quarter of the way across, or near the left if they are wide, with their pitches centred, and
+        /// selects them in place of the selection if <paramref name="select"/> isn't 0. Notes in other parts are left
+        /// out. The ticks are read before this returns. Returns 0 once shown, or queued until OpenUtau is ready, 1 if
+        /// it failed, and 2 if no tick names a note of the track.</summary>
+        [UnmanagedCallersOnly]
+        public static int ShowNotes(int trackNo, IntPtr ticks, int count, int select) {
+            int result = 0;
+            int failed = Guard("show notes", () => {
+                if (count < 0 || count > 0 && ticks == IntPtr.Zero) {
+                    throw new ArgumentException($"No ticks for {count} notes");
+                }
+                var starts = new int[count];
+                if (count > 0) {
+                    Marshal.Copy(ticks, starts, 0, count);
+                }
+                if (ready) {
+                    result = ShowNotesNow(trackNo, starts, select != 0) ? 0 : 2;
+                } else {
+                    pendingView = () => ShowNotesNow(trackNo, starts, select != 0);
+                }
+            });
+            return failed != 0 ? failed : result;
+        }
+
+        /// <summary>Shows a track's part under a tick from the project's start, or else the part ending last before
+        /// it, or else its first part. A part already open stays where it is scrolled; another opens centred on the
+        /// tick, or as near it as the part reaches. Returns 0 once shown, or queued until OpenUtau is ready, 1 if it
+        /// failed, and 2 if the track has no voice part.</summary>
+        [UnmanagedCallersOnly]
+        public static int ShowTrackAt(int trackNo, int tick) {
+            int result = 0;
+            int failed = Guard("show track at a tick", () => {
+                if (ready) {
+                    result = ShowPartAt(trackNo, tick) ? 0 : 2;
+                } else {
+                    pendingView = () => ShowPartAt(trackNo, tick);
+                }
+            });
+            return failed != 0 ? failed : result;
+        }
+
+        /// <summary>Gives <paramref name="function"/> what OpenUtau sings, as UTF-8 JSON, with
+        /// <paramref name="context"/> passed back to it, and returns 0. The JSON is described at
+        /// <see cref="EmbeddedNotes.PhonemesJson"/>. The function is called once, on the main thread, before this
+        /// returns. Its text belongs to OpenUtau and is valid only during the call, so copy what you keep. Its length
+        /// is in bytes and leaves out the NUL that ends it. Until OpenUtau is ready the text is
+        /// <c>{"pending":true,"tracks":[]}</c>. Returns 1, without calling the function, if it is null or this is
+        /// called on another thread.</summary>
+        [UnmanagedCallersOnly]
+        public static int ReadPhonemes(IntPtr function, IntPtr context) => Guard("read phonemes", () => {
+            if (function == IntPtr.Zero) {
+                throw new ArgumentNullException(nameof(function));
+            }
+            if (ready && !Dispatcher.UIThread.CheckAccess()) {
+                throw new InvalidOperationException("Phonemes are read on the main thread");
+            }
+            var receive = Marshal.GetDelegateForFunctionPointer<TextFunction>(function);
+            if (ready) {
+                // An edit OpenUtau validates later would leave its part looking up to date until then.
+                DocManager.Inst.FlushValidation();
+            }
+            var json = EmbeddedNotes.PhonemesJson(ready ? DocManager.Inst.Project : null);
+            var text = new byte[json.Length + 1];
+            json.CopyTo(text, 0);
+            var pinned = GCHandle.Alloc(text, GCHandleType.Pinned);
+            try {
+                receive(context, pinned.AddrOfPinnedObject(), json.Length);
+            } finally {
+                pinned.Free();
+            }
+        });
+
+        /// <summary>Takes the function OpenUtau tells of changes to, or null to stop. It is called on the main thread
+        /// with 0 when what <see cref="ReadPhonemes"/> reports may have changed: when phonemes arrive, a project
+        /// opens, or tracks, parts or notes change. It runs from the main thread's run loop, never within a call into
+        /// OpenUtau, and a burst of changes is told once. Other numbers will tell of other changes, so ignore those
+        /// you don't know.</summary>
+        [UnmanagedCallersOnly]
+        public static int SetListener(IntPtr function) => Guard("set listener", () => {
+            var native = function == IntPtr.Zero ? null : Marshal.GetDelegateForFunctionPointer<ListenerFunction>(function);
+            Listen(native == null ? null : change => native(change));
+        });
+
+        /// <summary>The managed side of <see cref="SetListener"/>.</summary>
+        public static void Listen(Action<int>? function) {
+            listener = function;
+            if (tellChanges == null) {
+                tellChanges = new TellChanges();
+                DocManager.Inst.AddSubscriber(tellChanges);
+            }
+        }
 
         /// <summary>Connects OpenUtau's DAW Integration to the server a discovery file names.</summary>
         [UnmanagedCallersOnly]
@@ -242,7 +381,6 @@ namespace OpenUtau.App.Embedding {
         }
 
         static void ShowTrack(int trackNo) {
-            pendingTrack = -1;
             var project = DocManager.Inst.Project;
             var part = project.parts.OfType<UVoicePart>().Where(p => p.trackNo == trackNo).OrderBy(p => p.position).FirstOrDefault();
             if (part == null || pianoRoll == null) {
@@ -250,6 +388,48 @@ namespace OpenUtau.App.Embedding {
             }
             DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, project, part.position));
             pianoRoll.AttachExpressions();
+        }
+
+        static bool ShowPartAt(int trackNo, int tick) => pianoRoll != null && ShowPartIn(pianoRoll, trackNo, tick);
+
+        static bool ShowNotesNow(int trackNo, int[] ticks, bool select) => pianoRoll != null && ShowNotesIn(pianoRoll, trackNo, ticks, select);
+
+        /// <summary>The piano roll part of <see cref="ShowTrackAt"/>. False if the track has no voice part.</summary>
+        public static bool ShowPartIn(PianoRoll pianoRoll, int trackNo, int tick) {
+            var project = DocManager.Inst.Project;
+            var part = EmbeddedNotes.PartAt(project, trackNo, tick);
+            if (part == null) {
+                return false;
+            }
+            if (pianoRoll.ViewModel.NotesViewModel.Part != part) {
+                DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, project, Math.Clamp(tick, part.position, part.End)));
+                pianoRoll.AttachExpressions();
+            }
+            return true;
+        }
+
+        /// <summary>The piano roll part of <see cref="ShowNotes"/>. False if no tick names a note of the track.</summary>
+        public static bool ShowNotesIn(PianoRoll pianoRoll, int trackNo, IReadOnlyList<int> ticks, bool select) {
+            var project = DocManager.Inst.Project;
+            var found = EmbeddedNotes.FindNotes(project, trackNo, ticks);
+            if (found == null) {
+                return false;
+            }
+            var (part, notes) = found.Value;
+            var notesVm = pianoRoll.ViewModel.NotesViewModel;
+            if (notesVm.Part != part) {
+                DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, project, part.position + notes[0].position));
+                pianoRoll.AttachExpressions();
+            }
+            if (select) {
+                notesVm.Selection.Select(notes);
+                MessageBus.Current.SendMessage(new NotesSelectionEvent(notesVm.Selection));
+            }
+            var (tickOffset, trackOffset) = EmbeddedNotes.Placement(notes,
+                notesVm.ViewportTicks, notesVm.ViewportTracks, notesVm.HScrollBarMax, notesVm.VScrollBarMax);
+            notesVm.TickOffset = tickOffset;
+            notesVm.TrackOffset = trackOffset;
+            return true;
         }
 
         static void ConnectTo(string file) {
@@ -292,22 +472,46 @@ namespace OpenUtau.App.Embedding {
             return project.Saved;
         }
 
-        /// <summary>Dialogs need an owner window, and the embedded piano roll has none, so a
-        /// tiny window stands in.</summary>
+        /// <summary>Dialogs need an owner window that is showing, and the embedded piano roll has none, so a tiny
+        /// transparent window at the piano roll's centre stands in, and dialogs centred on their owner open over the
+        /// piano roll. It shows only while it owns a window. It hides once they have all closed, or straight after the
+        /// caller's work if that opened none.</summary>
         public static Window DialogOwner() {
-            if (dialogOwner == null) {
-                dialogOwner = new Window {
-                    Width = 1,
-                    Height = 1,
-                    WindowDecorations = WindowDecorations.None,
-                    ShowInTaskbar = false,
-                    ShowActivated = false,
-                    Background = Brushes.Transparent,
-                    TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent },
-                };
+            dialogOwner ??= new Window {
+                Width = 1,
+                Height = 1,
+                WindowDecorations = WindowDecorations.None,
+                ShowInTaskbar = false,
+                ShowActivated = false,
+                Background = Brushes.Transparent,
+                TransparencyLevelHint = new[] { WindowTransparencyLevel.Transparent },
+            };
+            if (!dialogOwner.IsVisible) {
+                if (root != null && root.Bounds.Width > 0) {
+                    dialogOwner.Position = root.PointToScreen(new Point(root.Bounds.Width / 2, root.Bounds.Height / 2));
+                }
                 dialogOwner.Show();
             }
+            Dispatcher.UIThread.Post(HideDialogOwnerIfUnused, DispatcherPriority.Background);
             return dialogOwner;
+        }
+
+        static void HideDialogOwnerIfUnused() {
+            if (dialogOwner == null || !dialogOwner.IsVisible) {
+                return;
+            }
+            if (dialogOwner.OwnedWindows.Count == 0) {
+                dialogOwner.Hide();
+                return;
+            }
+            foreach (var window in dialogOwner.OwnedWindows) {
+                window.Closed -= OnOwnedWindowClosed;
+                window.Closed += OnOwnedWindowClosed;
+            }
+        }
+
+        static void OnOwnedWindowClosed(object? sender, EventArgs e) {
+            Dispatcher.UIThread.Post(HideDialogOwnerIfUnused, DispatcherPriority.Background);
         }
     }
 }

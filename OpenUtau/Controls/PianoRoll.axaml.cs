@@ -48,7 +48,9 @@ namespace OpenUtau.App.Controls {
         private ReactiveCommand<RxVoid, RxVoid>? noteDefaultsCommand;
         private ReactiveCommand<BatchEdit, RxVoid>? noteBatchEditCommand;
 
-        private Window RootWindow => TopLevel.GetTopLevel(this) as Window ?? Embedding.EmbeddedHost.DialogOwner();
+        private Window RootWindow => OwnWindow ?? Embedding.EmbeddedHost.DialogOwner();
+        // The window the piano roll is in. Null when another app embeds it, which keeps its own window.
+        private Window? OwnWindow => TopLevel.GetTopLevel(this) as Window;
         private TopLevel? RootTopLevel => TopLevel.GetTopLevel(this);
 
         private readonly ValueGlide hScroll;
@@ -318,7 +320,10 @@ namespace OpenUtau.App.Controls {
             MessageBus.Current.SendMessage(new PianorollRefreshEvent("TrackColor"));
         }
         void OnMenuFullScreen(object sender, RoutedEventArgs args) {
-            RootWindow.WindowState = RootWindow.WindowState == WindowState.FullScreen
+            if (OwnWindow is not Window window) {
+                return;
+            }
+            window.WindowState = window.WindowState == WindowState.FullScreen
                 ? WindowState.Normal
                 : WindowState.FullScreen;
         }
@@ -355,7 +360,7 @@ namespace OpenUtau.App.Controls {
             if (MainWindow != null) {
                 await MainWindow.OpenSingersWindowAsync();
             }
-            RootWindow.Activate();
+            OwnWindow?.Activate();
             try {
                 USinger? singer = null;
                 UOto? oto = null;
@@ -383,7 +388,7 @@ namespace OpenUtau.App.Controls {
         }
 
         void OnHidePianoRoll(object sender, RoutedEventArgs args) {
-            if (RootWindow.DataContext is MainWindowViewModel mwvm) {
+            if (OwnWindow?.DataContext is MainWindowViewModel mwvm) {
                 mwvm.ShowPianoRoll = false;
             }
         }
@@ -1319,7 +1324,7 @@ namespace OpenUtau.App.Controls {
                             if (MainWindow != null) {
                                 await MainWindow.OpenSingersWindowAsync();
                             }
-                            RootWindow.Activate();
+                            OwnWindow?.Activate();
                             DocManager.Inst.ExecuteCmd(new GotoOtoNotification(singer, hitAliasInfo.phoneme.oto));
                         }
                         return;
@@ -1660,8 +1665,8 @@ namespace OpenUtau.App.Controls {
                     break;
                 case Key.F4:
                     if (isAlt) {
-                        if (RootWindow is PianoRollDetachedWindow) {
-                            RootWindow.Hide();
+                        if (OwnWindow is PianoRollDetachedWindow window) {
+                            window.Hide();
                         }
                         return true;
                     }
