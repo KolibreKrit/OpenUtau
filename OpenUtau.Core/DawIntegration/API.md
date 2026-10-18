@@ -208,6 +208,7 @@ are opaque correlation strings.
 
 - The whole USTX document, resent per change (debounced, §7). Atomic replacement: the
   receiver **MUST** discard its previous project state on receipt.
+- Not sent while the project is unsaved (§7).
 
 #### `updatePartLayout` (request)
 
@@ -269,6 +270,8 @@ Notes:
 
 - What a plugin's UI may show about the project. `name` is the project file's stem; an
   unsaved project reports `saved` `false` and an empty `name`.
+- While `saved` is `false`, OpenUtau sends no `updateUstx` (§7). The USTX a plugin last
+  received then belongs to a project that is no longer open.
 - Carries no state the mixer or renderer needs; a plugin may ignore it.
 
 ### 6.2 Plugin → OpenUtau
@@ -365,6 +368,14 @@ Implementations **MUST NOT** invent wire shapes for this direction under the v1 
 updateUstx → updateTracks → updateProjectInfo → updatePartLayout (+ audio pulls)
 ```
 
+- **Loading a project:** opening a project or starting a new one sends a full sync in the
+  order above, without waiting for the debounce.
+- **Unsaved project:** USTX stores wave paths relative to the project file, so a project
+  that has never been saved has no USTX. OpenUtau refuses to connect while the project is
+  unsaved, because `init` needs one. When an unsaved project replaces the open one while
+  connected (a new project, or one made from a template), OpenUtau sends no `updateUstx`
+  until it is saved. `updateTracks`, `updateProjectInfo` (`saved` `false`) and
+  `updatePartLayout` still go out.
 - **Failures:** a stream that OpenUtau fails to build is skipped, and the streams due with
   it still go out. The skipped stream is sent again on its next change.
 

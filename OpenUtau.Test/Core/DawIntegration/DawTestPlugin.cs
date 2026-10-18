@@ -35,6 +35,7 @@ namespace OpenUtau.Core.DawIntegration {
 
         public List<DawPartLayout> Layout { get; private set; } = new List<DawPartLayout>();
         public List<DawTrackInfo> Tracks { get; private set; } = new List<DawTrackInfo>();
+        public UpdateProjectInfoNotification? ProjectInfo { get; private set; }
 
         /// <summary>What this plugin answers <c>init</c> with. Set before connecting to test §4.</summary>
         public string ApiVersion { get; set; } = DawApiVersion.CurrentString;
@@ -125,6 +126,9 @@ namespace OpenUtau.Core.DawIntegration {
                 case DawMessageKind.UpdateTracks:
                     Tracks = payload?.Deserialize<UpdateTracksNotification>(DawJson.Options)?.Tracks
                         ?? new List<DawTrackInfo>();
+                    break;
+                case DawMessageKind.UpdateProjectInfo:
+                    ProjectInfo = payload?.Deserialize<UpdateProjectInfoNotification>(DawJson.Options);
                     break;
             }
             Received.Enqueue(kind);

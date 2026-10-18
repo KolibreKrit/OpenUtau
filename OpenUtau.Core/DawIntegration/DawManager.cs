@@ -451,6 +451,17 @@ namespace OpenUtau.Core.DawIntegration {
         }
 
         /// <summary>
+        /// The USTX for <c>updateUstx</c>, or null while the project is unsaved. USTX stores wave
+        /// paths relative to the project file, so an unsaved project has none to send (§7).
+        /// </summary>
+        private Task<string?> SerializeSavedProjectAsync() {
+            return OnDocumentThreadAsync(() => {
+                var project = ProjectSource();
+                return string.IsNullOrEmpty(project.FilePath) ? null : DawUstx.Serialize(project);
+            });
+        }
+
+        /// <summary>
         /// Runs work on the document thread. <see cref="DocManager.MainScheduler"/> is null until
         /// the UI calls <c>Initialize</c>, which is the case in tests; then the work runs inline.
         /// </summary>
@@ -640,7 +651,10 @@ namespace OpenUtau.Core.DawIntegration {
                 case DawSyncKind.Ustx: {
                     // Serialize once: BeforeSave/AfterSave mutate the project's serialization
                     // views, so N connections must not mean N mutation round trips.
-                    var payload = new UpdateUstxNotification { Ustx = await SerializeProjectAsync() };
+                    if (await SerializeSavedProjectAsync() is not string ustx) {
+                        break;
+                    }
+                    var payload = new UpdateUstxNotification { Ustx = ustx };
                     await BroadcastAsync(live, (conn, token) =>
                         conn.Transport!.SendNotificationAsync(DawMessageKind.UpdateUstx, payload, token),
                         cancellation);
@@ -713,10 +727,10 @@ namespace OpenUtau.Core.DawIntegration {
             }
             switch (kind) {
                 case DawSyncKind.Ustx:
-                    await live.SendNotificationAsync(
-                        DawMessageKind.UpdateUstx,
-                        new UpdateUstxNotification { Ustx = await SerializeProjectAsync() },
-                        cancellation);
+                    if (await SerializeSavedProjectAsync() is string ustx) {
+                        await live.SendNotificationAsync(
+                            DawMessageKind.UpdateUstx, new UpdateUstxNotification { Ustx = ustx }, cancellation);
+                    }
                     break;
                 case DawSyncKind.Tracks:
                     await live.SendNotificationAsync(

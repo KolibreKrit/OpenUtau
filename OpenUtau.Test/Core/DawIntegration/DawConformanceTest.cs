@@ -27,7 +27,7 @@ namespace OpenUtau.Core.DawIntegration {
 
         private readonly string directory;
         private readonly DawTestPlugin plugin;
-        private readonly UProject project;
+        private UProject project;
         private DawManager? manager;
         private DateTime now = T0;
 
@@ -82,8 +82,9 @@ namespace OpenUtau.Core.DawIntegration {
         /// </summary>
         private static UProject BuildProject() {
             var built = new UProject();
-            // v1.1 refuses to sync an unsaved project (the USTX serializer needs a FilePath
-            // for relative paths), so give the test project a plausible save location.
+            // OpenUtau refuses to connect while the project is unsaved (init carries the USTX,
+            // and the USTX serializer needs a FilePath for relative paths), so give the test
+            // project a plausible save location.
             built.FilePath = Path.Combine(Path.GetTempPath(), "conformance-test.ustx");
             // The expression descriptors phrase construction reads.
             built.RegisterExpression(new UExpressionDescriptor("engine", "eng", 0, 100, 0) { options = new[] { "" } });
@@ -364,11 +365,71 @@ namespace OpenUtau.Core.DawIntegration {
         }
 
         /// <summary>
+        /// File > New while connected. The blank project has no file for the USTX's relative
+        /// paths, so everything but the USTX goes out, and the plugin learns that the project
+        /// is unsaved.
+        /// </summary>
+        [Fact]
+        public async Task NewProjectSyncsEverythingButTheUstx() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            int connectMessages = plugin.Received.Count;
+
+            NewProject(openutau);
+            await openutau.PumpOnceAsync();
+
+            Assert.Equal(
+                new[] { DawMessageKind.UpdateTracks, DawMessageKind.UpdateProjectInfo, DawMessageKind.UpdatePartLayout },
+                plugin.Received.Skip(connectMessages).ToArray());
+            Assert.Equal("Track1", Assert.Single(plugin.Tracks).Name);
+            Assert.Empty(plugin.Layout);
+            Assert.False(plugin.ProjectInfo!.Saved);
+            Assert.Equal(string.Empty, plugin.ProjectInfo.Name);
+            Assert.True(openutau.IsConnected);
+        }
+
+        [Fact]
+        public async Task EditToAnUnsavedProjectSendsNoUstx() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            NewProject(openutau);
+            await openutau.PumpOnceAsync();
+            int before = plugin.Received.Count;
+
+            openutau.OnNext(new FakeEdit(), false);
+            now += DawSyncScheduler.DefaultSlowDebounce;
+            await openutau.PumpOnceAsync();
+
+            Assert.Equal(new[] { DawMessageKind.UpdatePartLayout }, plugin.Received.Skip(before).ToArray());
+            Assert.False(openutau.Scheduler.HasPending);
+        }
+
+        [Fact]
+        public async Task UstxSyncSkipsAnUnsavedProjectWithoutFailing() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            NewProject(openutau);
+            int before = plugin.Received.Count;
+
+            await openutau.SyncAsync(DawSyncKind.Ustx);
+            // A request, so everything sent before it has arrived once it is answered.
+            await openutau.SyncAsync(DawSyncKind.PartLayout);
+
+            Assert.Equal(new[] { DawMessageKind.UpdatePartLayout }, plugin.Received.Skip(before).ToArray());
+        }
+
+        /// <summary>
         /// A wave part with no file cannot be made relative to the project, so the USTX, the
         /// first stream sent, fails to serialize while every other stream still builds.
         /// </summary>
         private void BreakUstx() {
             project.parts.Add(new UWavePart { trackNo = 0 });
+        }
+
+        /// <summary>File > New as <c>MainWindowViewModel.NewProject</c> does it when there is no default template.</summary>
+        private void NewProject(DawManager openutau) {
+            project = Format.Ustx.Create();
+            openutau.OnNext(new LoadProjectNotification(project), false);
         }
 
         private void AssertPulledMatchesPart(DawPartLayout advertised, UVoicePart part) {
