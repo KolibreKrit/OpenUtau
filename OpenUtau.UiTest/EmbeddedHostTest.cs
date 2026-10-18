@@ -416,7 +416,8 @@ namespace OpenUtau.UiTest {
 
                     var failed = Snapshot(project);
                     Assert.Equal((0, waiting), (failed.GetProperty("rendering").GetInt32(), failed.GetProperty("failed").GetInt32()));
-                    Assert.Equal(0, EmbeddedMix.Snapshot(project, false).rendering);
+                    // Still read again while they wait, as a phrase build can land after the failure and tells nothing.
+                    Assert.Equal(waiting, EmbeddedMix.Snapshot(project, false).waiting);
                     // The part the pass left keeps its last audio, marked outdated.
                     var left = failed.GetProperty("parts")[0];
                     Assert.Equal(before, left.GetProperty("audioHash").GetString());

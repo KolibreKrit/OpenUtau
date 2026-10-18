@@ -22,8 +22,9 @@ namespace OpenUtau.App.Embedding {
         /// <summary>Edits come in bursts, such as a note dragged, and the USTX takes a while to write, so a snapshot
         /// with a new USTX waits this long after the last one.</summary>
         static readonly TimeSpan ustxInterval = TimeSpan.FromMilliseconds(100);
-        /// <summary>Nothing tells when a phrase build lands, so while a part renders the parts are read again this
-        /// often.</summary>
+        /// <summary>Nothing tells when a phrase build lands, so while a part waits for its render the parts are read
+        /// again this often. A part a failed pass left counts too, as a build can still land and make it current or
+        /// leave it nothing to sing.</summary>
         static readonly TimeSpan renderingInterval = TimeSpan.FromMilliseconds(250);
 
         static Action<string>? receiver;
@@ -108,11 +109,11 @@ namespace OpenUtau.App.Embedding {
                 return;
             }
             string json;
-            int rendering;
+            int waiting;
             try {
                 // An edit OpenUtau validates later would leave its part looking up to date until then.
                 DocManager.Inst.FlushValidation();
-                (json, rendering) = Snapshot(DocManager.Inst.Project, documentChanged);
+                (json, waiting) = Snapshot(DocManager.Inst.Project, documentChanged);
             } catch (Exception e) {
                 Log.Error(e, "Embedded OpenUtau couldn't read its parts");
                 return;
@@ -121,7 +122,7 @@ namespace OpenUtau.App.Embedding {
                 documentChanged = false;
                 ustxSentAt = DateTime.UtcNow;
             }
-            if (rendering > 0 && !polling) {
+            if (waiting > 0 && !polling) {
                 polling = true;
                 DispatcherTimer.RunOnce(() => {
                     polling = false;
@@ -135,9 +136,9 @@ namespace OpenUtau.App.Embedding {
             receiver(json);
         }
 
-        /// <summary>The snapshot <see cref="EmbeddedHost.SetMix"/> describes, and how many parts are rendering.
-        /// Parts a failed render pass left are counted as failed, not rendering.</summary>
-        public static (string json, int rendering) Snapshot(UProject project, bool withUstx) {
+        /// <summary>The snapshot <see cref="EmbeddedHost.SetMix"/> describes, and how many parts wait for a render:
+        /// those it counts as rendering, or as failed if a failed render pass left them.</summary>
+        public static (string json, int waiting) Snapshot(UProject project, bool withUstx) {
             var planner = PlaybackManager.Inst.MixPlanner;
             var now = new Dictionary<string, DawAudio.PartAudio>();
             var parts = project.parts.OfType<UVoicePart>().OrderBy(p => p.trackNo).ThenBy(p => p.position).ToList();
@@ -202,7 +203,7 @@ namespace OpenUtau.App.Embedding {
             lock (namedLock) {
                 named = now;
             }
-            return (System.Text.Encoding.UTF8.GetString(stream.ToArray()), renderFailed ? 0 : rendering);
+            return (System.Text.Encoding.UTF8.GetString(stream.ToArray()), rendering);
         }
 
         /// <summary>The project as OpenUtau saves it, or null if it can't be written.</summary>
