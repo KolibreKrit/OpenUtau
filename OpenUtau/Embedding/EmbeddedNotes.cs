@@ -17,12 +17,12 @@ namespace OpenUtau.App.Embedding {
         public static List<UVoicePart> VoiceParts(UProject project, int trackNo) =>
             project.parts.OfType<UVoicePart>().Where(p => p.trackNo == trackNo).OrderBy(p => p.position).ToList();
 
-        /// <summary>The track's voice part under a tick, the latest starting if parts overlap there. Otherwise the
-        /// part that ends last before the tick, or the first part if they all start after it. Null if the track
-        /// has no voice part.</summary>
+        /// <summary>The track's voice part under a tick. Where parts overlap it is the first in the project, the
+        /// one OpenUtau opens as playback reaches the tick. Otherwise the part that ends last before the tick, or
+        /// the first part if they all start after it. Null if the track has no voice part.</summary>
         public static UVoicePart? PartAt(UProject project, int trackNo, int tick) {
             var parts = VoiceParts(project, trackNo);
-            return parts.LastOrDefault(p => p.position <= tick && tick < p.End)
+            return project.parts.OfType<UVoicePart>().FirstOrDefault(p => p.trackNo == trackNo && p.position <= tick && tick < p.End)
                 ?? parts.Where(p => p.End <= tick).OrderBy(p => p.End).LastOrDefault()
                 ?? parts.FirstOrDefault();
         }

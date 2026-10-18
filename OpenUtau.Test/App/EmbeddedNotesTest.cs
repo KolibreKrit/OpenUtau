@@ -53,6 +53,11 @@ namespace OpenUtau.Test.App {
             Assert.Same(first, EmbeddedNotes.PartAt(project, 0, 100));
             Assert.Same(other, EmbeddedNotes.PartAt(project, 1, 4000));
             Assert.Null(EmbeddedNotes.PartAt(project, 2, 0));
+
+            // Where parts overlap, the first in the project, as OpenUtau's playback picks, even if it starts earlier.
+            var overlapping = Part(project, 0, 4800, 1920);
+            Assert.Same(second, EmbeddedNotes.PartAt(project, 0, 5000));
+            Assert.Same(overlapping, EmbeddedNotes.PartAt(project, 0, 6000));
         }
 
         [Fact]

@@ -22,6 +22,7 @@ using OpenUtau.Core;
 using OpenUtau.Core.DawIntegration;
 using OpenUtau.Core.Ustx;
 using ReactiveUI;
+using ReactiveUI.Primitives;
 using Serilog;
 
 namespace OpenUtau.App.Embedding {
@@ -38,6 +39,8 @@ namespace OpenUtau.App.Embedding {
         static string? pendingProject;
         // The last call to show a track or notes before OpenUtau was ready, run once it is.
         static Action? pendingView;
+        // A scroll waiting for the piano roll to have a size, replaced by the next.
+        static IDisposable? pendingScroll;
         static string? pendingServer;
         static readonly TextBlock status = new() {
             Text = "Starting OpenUtau…",
@@ -243,8 +246,9 @@ namespace OpenUtau.App.Embedding {
         /// It opens the part holding the first note found, scrolls as the application's SynthV script does, so the
         /// notes start a quarter of the way across, or near the left if they are wide, with their pitches centred, and
         /// selects them in place of the selection if <paramref name="select"/> isn't 0. Notes in other parts are left
-        /// out. The ticks are read before this returns. Returns 0 once shown, or queued until OpenUtau is ready, 1 if
-        /// it failed, and 2 if no tick names a note of the track.</summary>
+        /// out. The ticks are read before this returns. Until the piano roll has a size, the scroll waits for one.
+        /// Returns 0 once shown, or queued until OpenUtau is ready, 1 if it failed, and 2 if no tick names a note of
+        /// the track.</summary>
         [UnmanagedCallersOnly]
         public static int ShowNotes(int trackNo, IntPtr ticks, int count, int select) {
             int result = 0;
@@ -266,8 +270,9 @@ namespace OpenUtau.App.Embedding {
         }
 
         /// <summary>Shows a track's part under a tick from the project's start, or else the part ending last before
-        /// it, or else its first part. A part already open stays where it is scrolled; another opens centred on the
-        /// tick, or as near it as the part reaches. Returns 0 once shown, or queued until OpenUtau is ready, 1 if it
+        /// it, or else its first part. Where parts overlap, it is the part OpenUtau's playback would open. A part
+        /// already open stays where it is scrolled; another opens centred on the tick, or as near it as the part
+        /// reaches, once the piano roll has a size. Returns 0 once shown, or queued until OpenUtau is ready, 1 if it
         /// failed, and 2 if the track has no voice part.</summary>
         [UnmanagedCallersOnly]
         public static int ShowTrackAt(int trackNo, int tick) {
@@ -287,8 +292,8 @@ namespace OpenUtau.App.Embedding {
         /// <see cref="EmbeddedNotes.PhonemesJson"/>. The function is called once, on the main thread, before this
         /// returns. Its text belongs to OpenUtau and is valid only during the call, so copy what you keep. Its length
         /// is in bytes and leaves out the NUL that ends it. Until OpenUtau is ready the text is
-        /// <c>{"pending":true,"tracks":[]}</c>. Returns 1, without calling the function, if it is null or this is
-        /// called on another thread.</summary>
+        /// <c>{"pending":true,"tracks":[]}</c>. Returns 1, without calling the function, if it is null, or if OpenUtau
+        /// is ready and this is called on another thread.</summary>
         [UnmanagedCallersOnly]
         public static int ReadPhonemes(IntPtr function, IntPtr context) => Guard("read phonemes", () => {
             if (function == IntPtr.Zero) {
@@ -401,9 +406,14 @@ namespace OpenUtau.App.Embedding {
             if (part == null) {
                 return false;
             }
-            if (pianoRoll.ViewModel.NotesViewModel.Part != part) {
-                DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, project, Math.Clamp(tick, part.position, part.End)));
+            var notesVm = pianoRoll.ViewModel.NotesViewModel;
+            if (notesVm.Part != part) {
+                int at = Math.Clamp(tick, part.position, part.End);
+                DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, project, at));
                 pianoRoll.AttachExpressions();
+                // Loading centres the tick only if the piano roll already has a size.
+                WhenSized(notesVm, part, () => notesVm.TickOffset = Math.Clamp(
+                    at - part.position - notesVm.ViewportTicks / 2, 0, notesVm.HScrollBarMax));
             }
             return true;
         }
@@ -425,11 +435,38 @@ namespace OpenUtau.App.Embedding {
                 notesVm.Selection.Select(notes);
                 MessageBus.Current.SendMessage(new NotesSelectionEvent(notesVm.Selection));
             }
-            var (tickOffset, trackOffset) = EmbeddedNotes.Placement(notes,
-                notesVm.ViewportTicks, notesVm.ViewportTracks, notesVm.HScrollBarMax, notesVm.VScrollBarMax);
-            notesVm.TickOffset = tickOffset;
-            notesVm.TrackOffset = trackOffset;
+            WhenSized(notesVm, part, () => {
+                var (tickOffset, trackOffset) = EmbeddedNotes.Placement(notes,
+                    notesVm.ViewportTicks, notesVm.ViewportTracks, notesVm.HScrollBarMax, notesVm.VScrollBarMax);
+                notesVm.TickOffset = tickOffset;
+                notesVm.TrackOffset = trackOffset;
+            });
             return true;
+        }
+
+        /// <summary>Scrolls the piano roll now if it has a size, otherwise once it has one, as when a call made
+        /// before OpenUtau was ready runs before the piano roll is laid out. A scroll still waiting is dropped, and
+        /// so is this one if another part opens first.</summary>
+        static void WhenSized(NotesViewModel notesVm, UVoicePart part, Action scroll) {
+            pendingScroll?.Dispose();
+            pendingScroll = null;
+            if (notesVm.Bounds.Width > 0 && notesVm.Bounds.Height > 0) {
+                scroll();
+                return;
+            }
+            IDisposable? waiting = null;
+            waiting = notesVm.WhenAnyValue(x => x.Bounds).Subscribe(bounds => {
+                // The first value, given as this subscribes, is the size it doesn't have yet.
+                if (bounds.Width <= 0 || bounds.Height <= 0) {
+                    return;
+                }
+                waiting?.Dispose();
+                pendingScroll = null;
+                if (notesVm.Part == part) {
+                    scroll();
+                }
+            });
+            pendingScroll = waiting;
         }
 
         static void ConnectTo(string file) {

@@ -5,7 +5,6 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using Avalonia.Controls;
-using Avalonia.Threading;
 using OpenUtau.App.Controls;
 using OpenUtau.App.Embedding;
 using OpenUtau.App.ViewModels;
@@ -48,8 +47,10 @@ namespace OpenUtau.UiTest {
         }
 
         // Loads the project, opens a part and shows the piano roll at about the size SVCoverEditor gives it.
+        // beforeShow runs while the piano roll has no size yet, as when a call queued before OpenUtau was ready runs.
         // Afterwards the project is replaced by an empty one with no changes, as other tests expect.
-        static void WithPianoRoll(UProject project, UVoicePart part, Action<PianoRoll> test) => HeadlessUi.Run(() => {
+        static void WithPianoRoll(UProject project, UVoicePart part, Action<PianoRoll> test,
+                Action<PianoRoll>? beforeShow = null) => HeadlessUi.Run(() => {
             MainWindowTest.InitCore();
             // Embedded OpenUtau has no main window, which would validate edits on its frames.
             DocManager.Inst.RequestFrame = null;
@@ -64,6 +65,7 @@ namespace OpenUtau.UiTest {
             try {
                 DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, project, part.position));
                 HeadlessUi.Flush();
+                beforeShow?.Invoke(pianoRoll);
                 window.Show();
                 HeadlessUi.Flush();
                 test(pianoRoll);
@@ -177,6 +179,34 @@ namespace OpenUtau.UiTest {
         }
 
         [Fact]
+        public void ShowNotesBeforeThePianoRollHasASizeScrollsOnceItHasOne() {
+            var project = Project(out var first, out var second);
+            var wanted = second.notes.Skip(100).Take(3).ToList();
+            WithPianoRoll(project, first, beforeShow: pianoRoll => {
+                Assert.Equal(0, pianoRoll.ViewModel.NotesViewModel.Bounds.Width);
+                Assert.True(EmbeddedHost.ShowNotesIn(pianoRoll, 0, wanted.Select(n => second.position + n.position).ToList(), true));
+            }, test: pianoRoll => {
+                var notesVm = pianoRoll.ViewModel.NotesViewModel;
+                Assert.Same(second, notesVm.Part);
+                Assert.Equal(wanted, notesVm.Selection.ToList());
+                AssertShown(notesVm, wanted);
+                Assert.Equal(0.25, (wanted[0].position - notesVm.TickOffset) / notesVm.ViewportTicks, 2);
+            });
+        }
+
+        [Fact]
+        public void ShowTrackAtBeforeThePianoRollHasASizeCentresOnceItHasOne() {
+            var project = Project(out var first, out var second);
+            WithPianoRoll(project, first, beforeShow: pianoRoll => {
+                Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 80 * 480));
+            }, test: pianoRoll => {
+                var notesVm = pianoRoll.ViewModel.NotesViewModel;
+                Assert.Same(second, notesVm.Part);
+                Assert.Equal(80 * 480, notesVm.TickOffset + notesVm.ViewportTicks / 2, 0);
+            });
+        }
+
+        [Fact]
         public void ShowTrackAtOpensThePartUnderTheTick() {
             var project = Project(out var first, out var second);
             var other = project.parts.OfType<UVoicePart>().Single(p => p.trackNo == 1);
@@ -240,33 +270,56 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        // Notes each phonemizer result in a log, between the listener's calls.
+        sealed class PhonemesArrive : ICmdSubscriber {
+            public readonly List<string> log;
+            public PhonemesArrive(List<string> log) {
+                this.log = log;
+            }
+            public void OnNext(UCommand cmd, bool isUndo) {
+                if (cmd is PhonemizedNotification) {
+                    log.Add("phonemes");
+                }
+            }
+        }
+
         [Fact]
         public void AppIsToldOnceOfABurstOfChanges() {
             var project = Project(out var first, out _);
-            var told = new List<int>();
+            var log = new List<string>();
+            var arrive = new PhonemesArrive(log);
             WithPianoRoll(project, first, pianoRoll => {
                 try {
                     WaitForPhonemes(project);
-                    EmbeddedHost.Listen(told.Add);
+                    EmbeddedHost.Listen(change => log.Add($"told {change}"));
+                    DocManager.Inst.AddSubscriber(arrive);
                     DocManager.Inst.StartUndoGroup("test");
                     foreach (var note in first.notes) {
                         DocManager.Inst.ExecuteCmd(new ChangeNoteLyricCommand(first, note, "o"));
                     }
                     DocManager.Inst.EndUndoGroup();
-                    // Only the jobs waiting now, so phonemes arriving after can't add to the count.
-                    Dispatcher.UIThread.RunJobs();
-                    Assert.Equal(new[] { 0 }, told);
+                    Assert.Empty(log);
+                    WaitForPhonemes(project);
+
+                    // The burst is told once. Phonemes for it may arrive before or after, and are told again
+                    // unless they arrive while a telling is waiting.
+                    var told = Enumerable.Range(0, log.Count).Where(i => log[i].StartsWith("told")).ToList();
+                    Assert.NotEmpty(told);
+                    Assert.All(told, i => Assert.Equal("told 0", log[i]));
+                    for (int k = 1; k < told.Count; ++k) {
+                        Assert.Contains("phonemes", log.GetRange(told[k - 1] + 1, told[k] - told[k - 1] - 1));
+                    }
 
                     EmbeddedHost.Listen(null);
-                    WaitForPhonemes(project);
-                    told.Clear();
+                    log.Clear();
                     DocManager.Inst.StartUndoGroup("test");
                     DocManager.Inst.ExecuteCmd(new ChangeNoteLyricCommand(first, first.notes.ElementAt(0), "u"));
                     DocManager.Inst.EndUndoGroup();
                     WaitForPhonemes(project);
-                    Assert.Empty(told);
+                    Assert.DoesNotContain(log, entry => entry.StartsWith("told"));
                 } finally {
                     EmbeddedHost.Listen(null);
+                    DocManager.Inst.RemoveSubscriber(arrive);
                 }
             });
         }
