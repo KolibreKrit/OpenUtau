@@ -270,6 +270,62 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        [Fact]
+        public void TheMixSnapshotHasTheTracksTheUstxAndThePartsStillRendering() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, pianoRoll => {
+                DocManager.Inst.StartUndoGroup("test");
+                DocManager.Inst.ExecuteCmd(new ChangeNoteLyricCommand(first, first.notes.ElementAt(0), "la"));
+                DocManager.Inst.EndUndoGroup();
+                DocManager.Inst.FlushValidation();
+
+                var (text, rendering) = EmbeddedMix.Snapshot(project, true);
+
+                using var json = JsonDocument.Parse(text);
+                var root = json.RootElement;
+                Assert.Equal(2, root.GetProperty("tracks").GetArrayLength());
+                Assert.Equal("test", root.GetProperty("tracks")[0].GetProperty("singer").GetString());
+                // The edited part waits for its phonemes, and a part is listed only once it has audio.
+                Assert.InRange(rendering, 1, 3);
+                Assert.Equal(rendering, root.GetProperty("rendering").GetInt32());
+                Assert.Equal(3 - rendering, root.GetProperty("parts").GetArrayLength());
+                // The project has never been saved, and its USTX is written all the same.
+                Assert.False(root.GetProperty("saved").GetBoolean());
+                Assert.Contains("lyric: la", root.GetProperty("ustx").GetString());
+                Assert.Equal(string.Empty, project.FilePath);
+
+                using var unchanged = JsonDocument.Parse(EmbeddedMix.Snapshot(project, false).json);
+                Assert.False(unchanged.RootElement.TryGetProperty("ustx", out _));
+                Assert.Equal(2, EmbeddedMix.ReadAudio("1", out _));
+            });
+        }
+
+        [Fact]
+        public void PartsAFailedRenderLeftAreFailedUntilTheNextPass() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, pianoRoll => {
+                EmbeddedMix.Listen(null);
+                DocManager.Inst.StartUndoGroup("test");
+                DocManager.Inst.ExecuteCmd(new ChangeNoteLyricCommand(first, first.notes.ElementAt(0), "la"));
+                DocManager.Inst.EndUndoGroup();
+                DocManager.Inst.FlushValidation();
+                int Count(string name) => JsonDocument.Parse(EmbeddedMix.Snapshot(project, false).json).RootElement.GetProperty(name).GetInt32();
+                int waiting = Count("rendering");
+                Assert.True(waiting > 0);
+
+                DocManager.Inst.ExecuteCmd(new ToastNotification("Pianoroll", "Failed to pre-render.", "errors.failed.prerender"));
+                HeadlessUi.Flush();
+
+                Assert.Equal((0, waiting), (Count("rendering"), Count("failed")));
+                Assert.Equal(0, EmbeddedMix.Snapshot(project, false).rendering);
+
+                DocManager.Inst.ExecuteCmd(new PreRenderNotification());
+                HeadlessUi.Flush();
+
+                Assert.Equal(0, Count("failed"));
+            });
+        }
+
         // Notes each phonemizer result in a log, between the listener's calls.
         sealed class PhonemesArrive : ICmdSubscriber {
             public readonly List<string> log;

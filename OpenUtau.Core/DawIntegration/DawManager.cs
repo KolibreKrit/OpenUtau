@@ -13,8 +13,8 @@ namespace OpenUtau.Core.DawIntegration {
     public enum DawSyncKind {
         Ustx = 0,
         Tracks = 1,
-        PartLayout = 2,
-        ProjectInfo = 3,
+        ProjectInfo = 2,
+        PartLayout = 3,
     }
 
     /// <summary>
@@ -267,6 +267,12 @@ namespace OpenUtau.Core.DawIntegration {
         private double lastDawBpm = double.NaN;
         private double lastWarnedProjectBpm = double.NaN;
 
+        /// <summary>
+        /// The FilePath of the last USTX serialized for the plugins, or null if none has been
+        /// since the open project loaded. Document thread only.
+        /// </summary>
+        private string? ustxFilePath;
+
         public DawManager() : this(null) { }
 
         public DawManager(
@@ -447,7 +453,24 @@ namespace OpenUtau.Core.DawIntegration {
         /// mutate the project, so it has to happen on the document thread.
         /// </summary>
         private Task<string> SerializeProjectAsync() {
-            return OnDocumentThreadAsync(() => DawUstx.Serialize(ProjectSource()));
+            return OnDocumentThreadAsync(() => Serialize(ProjectSource()));
+        }
+
+        /// <summary>
+        /// The USTX for <c>updateUstx</c>, or null while the project is unsaved. USTX stores wave
+        /// paths relative to the project file, so an unsaved project has none to send (§7).
+        /// </summary>
+        private Task<string?> SerializeSavedProjectAsync() {
+            return OnDocumentThreadAsync(() => {
+                var project = ProjectSource();
+                return string.IsNullOrEmpty(project.FilePath) ? null : Serialize(project);
+            });
+        }
+
+        private string Serialize(UProject project) {
+            string ustx = DawUstx.Serialize(project);
+            ustxFilePath = project.FilePath;
+            return ustx;
         }
 
         /// <summary>
@@ -559,12 +582,17 @@ namespace OpenUtau.Core.DawIntegration {
                     lock (stateLock) {
                         hashOwners.Clear();
                     }
+                    ustxFilePath = null;
                     scheduler.RequestFullSync(now);
                     break;
                 case SaveProjectNotification:
-                    // Saving for the first time is what turns an unsaved project syncable, and
-                    // the file name is what the plugins' info windows show.
-                    scheduler.Touch(DawSyncKind.ProjectInfo, now);
+                    if (ProjectSource().FilePath != ustxFilePath) {
+                        // A first save, or a save under a new path: the plugins hold no USTX
+                        // for this file, or one whose relative paths are now wrong.
+                        scheduler.RequestFullSync(now);
+                    } else {
+                        scheduler.Touch(DawSyncKind.ProjectInfo, now);
+                    }
                     break;
                 case UNotification:
                     // Transient UI state — play position, selection, progress. Not project data.
@@ -596,20 +624,32 @@ namespace OpenUtau.Core.DawIntegration {
                 return;
             }
             try {
-                foreach (var kind in scheduler.TryTake(NowUtc())) {
-                    if (!IsConnected) {
-                        break;
-                    }
-                    await SyncAsync(kind, cancellation);
-                }
+                await SyncTakenAsync(scheduler.TryTake(NowUtc()), cancellation);
             } catch (OperationCanceledException) {
                 // Shutting down.
-            } catch (Exception e) {
-                // A refused envelope or a serialization fault leaves the stream coherent, so the
-                // connection survives and the stream is retried on the next edit.
-                Log.Error(e, "DAW: sync failed.");
             } finally {
                 syncGate.Release();
+            }
+        }
+
+        /// <summary>
+        /// Sends streams already taken off the scheduler, in order. Send failures are handled
+        /// per connection by <see cref="BroadcastAsync"/>, so what reaches the catch is a payload
+        /// that failed to build. That stream is logged and goes out again on its next trigger;
+        /// the ones after it are taken too, so stopping would leave them stale.
+        /// </summary>
+        private async Task SyncTakenAsync(DawSyncKind[] kinds, CancellationToken cancellation) {
+            foreach (var kind in kinds) {
+                if (!IsConnected) {
+                    break;
+                }
+                try {
+                    await SyncAsync(kind, cancellation);
+                } catch (OperationCanceledException) {
+                    throw;
+                } catch (Exception e) {
+                    Log.Error(e, $"DAW: {kind} sync failed.");
+                }
             }
         }
 
@@ -628,7 +668,10 @@ namespace OpenUtau.Core.DawIntegration {
                 case DawSyncKind.Ustx: {
                     // Serialize once: BeforeSave/AfterSave mutate the project's serialization
                     // views, so N connections must not mean N mutation round trips.
-                    var payload = new UpdateUstxNotification { Ustx = await SerializeProjectAsync() };
+                    if (await SerializeSavedProjectAsync() is not string ustx) {
+                        break;
+                    }
+                    var payload = new UpdateUstxNotification { Ustx = ustx };
                     await BroadcastAsync(live, (conn, token) =>
                         conn.Transport!.SendNotificationAsync(DawMessageKind.UpdateUstx, payload, token),
                         cancellation);
@@ -701,10 +744,10 @@ namespace OpenUtau.Core.DawIntegration {
             }
             switch (kind) {
                 case DawSyncKind.Ustx:
-                    await live.SendNotificationAsync(
-                        DawMessageKind.UpdateUstx,
-                        new UpdateUstxNotification { Ustx = await SerializeProjectAsync() },
-                        cancellation);
+                    if (await SerializeSavedProjectAsync() is string ustx) {
+                        await live.SendNotificationAsync(
+                            DawMessageKind.UpdateUstx, new UpdateUstxNotification { Ustx = ustx }, cancellation);
+                    }
                     break;
                 case DawSyncKind.Tracks:
                     await live.SendNotificationAsync(
@@ -1103,9 +1146,7 @@ namespace OpenUtau.Core.DawIntegration {
                 // than replayed by the next pump tick (§9: the DAW keeps the final state).
                 scheduler.FlushPending(NowUtc());
                 try {
-                    foreach (var kind in scheduler.TryTake(NowUtc())) {
-                        await SyncAsync(kind);
-                    }
+                    await SyncTakenAsync(scheduler.TryTake(NowUtc()), CancellationToken.None);
                 } catch (Exception e) {
                     Log.Warning(e, "DAW: the final sync before closing failed.");
                 }

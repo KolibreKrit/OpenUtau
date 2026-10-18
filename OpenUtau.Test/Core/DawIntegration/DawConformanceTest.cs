@@ -27,7 +27,7 @@ namespace OpenUtau.Core.DawIntegration {
 
         private readonly string directory;
         private readonly DawTestPlugin plugin;
-        private readonly UProject project;
+        private UProject project;
         private DawManager? manager;
         private DateTime now = T0;
 
@@ -82,8 +82,9 @@ namespace OpenUtau.Core.DawIntegration {
         /// </summary>
         private static UProject BuildProject() {
             var built = new UProject();
-            // v1.1 refuses to sync an unsaved project (the USTX serializer needs a FilePath
-            // for relative paths), so give the test project a plausible save location.
+            // OpenUtau refuses to connect while the project is unsaved (init carries the USTX,
+            // and the USTX serializer needs a FilePath for relative paths), so give the test
+            // project a plausible save location.
             built.FilePath = Path.Combine(Path.GetTempPath(), "conformance-test.ustx");
             // The expression descriptors phrase construction reads.
             built.RegisterExpression(new UExpressionDescriptor("engine", "eng", 0, 100, 0) { options = new[] { "" } });
@@ -330,6 +331,185 @@ namespace OpenUtau.Core.DawIntegration {
             // §8: the ladder exists for failures, not for a disconnect the user asked for.
             Assert.Equal(DawConnectionState.Disconnected, openutau.State);
             Assert.Equal(1, plugin.Received.Count(kind => kind == DawMessageKind.Init));
+        }
+
+        [Fact]
+        public async Task FailedStreamDoesNotDropTheStreamsAfterIt() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            int connectMessages = plugin.Received.Count;
+            BreakUstx();
+
+            openutau.Scheduler.RequestFullSync(now);
+            await openutau.PumpOnceAsync();
+
+            Assert.Equal(
+                new[] { DawMessageKind.UpdateTracks, DawMessageKind.UpdateProjectInfo, DawMessageKind.UpdatePartLayout },
+                plugin.Received.Skip(connectMessages).ToArray());
+            Assert.True(openutau.IsConnected);
+        }
+
+        [Fact]
+        public async Task FailedStreamDoesNotDropTheRestOfTheFinalSync() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            int connectMessages = plugin.Received.Count;
+            BreakUstx();
+
+            openutau.Scheduler.RequestFullSync(now);
+            await openutau.DisconnectAsync();
+
+            Assert.Equal(
+                new[] { DawMessageKind.UpdateTracks, DawMessageKind.UpdateProjectInfo, DawMessageKind.UpdatePartLayout },
+                plugin.Received.Skip(connectMessages).ToArray());
+        }
+
+        /// <summary>
+        /// File > New while connected. The blank project has no file for the USTX's relative
+        /// paths, so everything but the USTX goes out, and the plugin learns that the project
+        /// is unsaved.
+        /// </summary>
+        [Fact]
+        public async Task NewProjectSyncsEverythingButTheUstx() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            int connectMessages = plugin.Received.Count;
+
+            NewProject(openutau);
+            await openutau.PumpOnceAsync();
+
+            Assert.Equal(
+                new[] { DawMessageKind.UpdateTracks, DawMessageKind.UpdateProjectInfo, DawMessageKind.UpdatePartLayout },
+                plugin.Received.Skip(connectMessages).ToArray());
+            Assert.Equal("Track1", Assert.Single(plugin.Tracks).Name);
+            Assert.Empty(plugin.Layout);
+            Assert.False(plugin.ProjectInfo!.Saved);
+            Assert.Equal(string.Empty, plugin.ProjectInfo.Name);
+            Assert.True(openutau.IsConnected);
+        }
+
+        [Fact]
+        public async Task EditToAnUnsavedProjectSendsNoUstx() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            NewProject(openutau);
+            await openutau.PumpOnceAsync();
+            int before = plugin.Received.Count;
+
+            openutau.OnNext(new FakeEdit(), false);
+            now += DawSyncScheduler.DefaultSlowDebounce;
+            await openutau.PumpOnceAsync();
+
+            Assert.Equal(new[] { DawMessageKind.UpdatePartLayout }, plugin.Received.Skip(before).ToArray());
+            Assert.False(openutau.Scheduler.HasPending);
+        }
+
+        [Fact]
+        public async Task UstxSyncSkipsAnUnsavedProjectWithoutFailing() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            NewProject(openutau);
+            int before = plugin.Received.Count;
+
+            await openutau.SyncAsync(DawSyncKind.Ustx);
+            // A request, so everything sent before it has arrived once it is answered.
+            await openutau.SyncAsync(DawSyncKind.PartLayout);
+
+            Assert.Equal(new[] { DawMessageKind.UpdatePartLayout }, plugin.Received.Skip(before).ToArray());
+        }
+
+        [Fact]
+        public async Task FirstSaveSendsEveryStream() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            NewProject(openutau);
+            await openutau.PumpOnceAsync();
+            int before = plugin.Received.Count;
+
+            Save(openutau, Path.Combine(directory, "first.ustx"));
+            await openutau.PumpOnceAsync();
+
+            Assert.Equal(
+                new[] { DawMessageKind.UpdateUstx, DawMessageKind.UpdateTracks, DawMessageKind.UpdateProjectInfo, DawMessageKind.UpdatePartLayout },
+                plugin.Received.Skip(before).ToArray());
+            Assert.Equal(DawUstx.Serialize(project), plugin.Ustx);
+            Assert.True(plugin.ProjectInfo!.Saved);
+            Assert.Equal("first", plugin.ProjectInfo.Name);
+        }
+
+        /// <summary>
+        /// File > New, then saving over the file that was open. The path matches the USTX the
+        /// plugin holds, but that USTX is the old project's.
+        /// </summary>
+        [Fact]
+        public async Task SavingANewProjectOverTheOldFileSendsEveryStream() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            string oldPath = project.FilePath;
+            NewProject(openutau);
+            await openutau.PumpOnceAsync();
+            int before = plugin.Received.Count;
+
+            Save(openutau, oldPath);
+            await openutau.PumpOnceAsync();
+
+            Assert.Equal(
+                new[] { DawMessageKind.UpdateUstx, DawMessageKind.UpdateTracks, DawMessageKind.UpdateProjectInfo, DawMessageKind.UpdatePartLayout },
+                plugin.Received.Skip(before).ToArray());
+            Assert.Equal(DawUstx.Serialize(project), plugin.Ustx);
+        }
+
+        [Fact]
+        public async Task SavingUnderTheSamePathSendsOnlyProjectInfo() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            int before = plugin.Received.Count;
+
+            Save(openutau, project.FilePath);
+            now += DawSyncScheduler.DefaultSlowDebounce;
+            await openutau.PumpOnceAsync();
+            await plugin.WaitForCountAsync(DawMessageKind.UpdateProjectInfo, 2);
+
+            Assert.Equal(new[] { DawMessageKind.UpdateProjectInfo }, plugin.Received.Skip(before).ToArray());
+        }
+
+        /// <summary>Save As: the wave part's path in the USTX is relative to the new file.</summary>
+        [Fact]
+        public async Task SavingUnderANewPathSendsEveryStream() {
+            project.parts.Add(new UWavePart { trackNo = 0, FilePath = Path.Combine(directory, "vocal.wav") });
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            int before = plugin.Received.Count;
+
+            Save(openutau, Path.Combine(directory, "renamed.ustx"));
+            await openutau.PumpOnceAsync();
+
+            Assert.Equal(
+                new[] { DawMessageKind.UpdateUstx, DawMessageKind.UpdateTracks, DawMessageKind.UpdateProjectInfo, DawMessageKind.UpdatePartLayout },
+                plugin.Received.Skip(before).ToArray());
+            Assert.Equal(DawUstx.Serialize(project), plugin.Ustx);
+            Assert.Contains("relative_path: vocal.wav", plugin.Ustx);
+            Assert.Equal("renamed", plugin.ProjectInfo!.Name);
+        }
+
+        /// <summary>
+        /// A wave part with no file cannot be made relative to the project, so the USTX, the
+        /// first stream sent, fails to serialize while every other stream still builds.
+        /// </summary>
+        private void BreakUstx() {
+            project.parts.Add(new UWavePart { trackNo = 0 });
+        }
+
+        /// <summary>File > New as <c>MainWindowViewModel.NewProject</c> does it when there is no default template.</summary>
+        private void NewProject(DawManager openutau) {
+            project = Format.Ustx.Create();
+            openutau.OnNext(new LoadProjectNotification(project), false);
+        }
+
+        /// <summary>A save as <c>DocManager</c> runs it, without writing the file: the path is set before subscribers hear of it.</summary>
+        private void Save(DawManager openutau, string path) {
+            project.FilePath = path;
+            openutau.OnNext(new SaveProjectNotification(path), false);
         }
 
         private void AssertPulledMatchesPart(DawPartLayout advertised, UVoicePart part) {

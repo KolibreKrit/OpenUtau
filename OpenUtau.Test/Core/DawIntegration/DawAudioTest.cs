@@ -236,5 +236,85 @@ namespace OpenUtau.Core.DawIntegration {
             float trim = MathF.Sqrt(0.5f);
             Assert.Equal(samples.Take(extracted.Length).Select(s => s * trim), extracted);
         }
+
+        [Fact]
+        public void ReadingAPartTellsRenderedFromRendering() {
+            var part = new UVoicePart { trackNo = 0, position = 480, duration = 480 };
+
+            var rendering = DawAudio.ReadPart(NewPlanner(part, ready: false), part, Placements(), 500, 1000);
+            var ready = DawAudio.ReadPart(NewPlanner(part), part, Placements(), 500, 1000);
+
+            Assert.Equal(DawAudio.PartState.Rendering, rendering.State);
+            Assert.False(rendering.TryMix(out _));
+            Assert.Equal(DawAudio.PartState.Ready, ready.State);
+            Assert.NotEqual(0UL, ready.Key);
+        }
+
+        [Fact]
+        public void APartWithNothingToSingIsSilent() {
+            var project = NewProject();
+            var part = new UVoicePart { trackNo = 0, position = 0, duration = 480 };
+
+            Assert.Equal(DawAudio.PartState.Silent, DawAudio.ReadPart(project, part, new MixPlanner()).State);
+            Assert.Equal(DawAudio.PartState.Silent,
+                DawAudio.ReadPart(new MixPlanner(), part, Array.Empty<(ulong, double, double)>(), 0, 500).State);
+        }
+
+        [Fact]
+        public void TheKeyNamesTheWindowAndEachPhrase() {
+            var part = new UVoicePart { trackNo = 0, position = 480, duration = 480 };
+            var planner = NewPlanner(part);
+            planner.RegisterPcm(part, 2, 0, RampDurationMs, 2, new float[DawAudio.MsToInterleavedIndex(RampDurationMs)]);
+            ulong Key((ulong, double, double)[] phrases, double startMs, double endMs) =>
+                DawAudio.ReadPart(planner, part, phrases, startMs, endMs).Key;
+
+            ulong key = Key(Placements(), 500, 1000);
+
+            Assert.Equal(key, Key(Placements(), 500, 1000));
+            Assert.NotEqual(key, Key(Placements(), 0, 1000));
+            Assert.NotEqual(key, Key(Placements(), 500, 1500));
+            Assert.NotEqual(key, Key(new[] { (2UL, 0.0, (double)RampDurationMs) }, 500, 1000));
+            Assert.NotEqual(key, Key(new[] { (1UL, 10.0, (double)RampDurationMs) }, 500, 1000));
+        }
+
+        [Fact]
+        public void APhraseAnEditMadeIsRenderingWhileTheLastRenderIsReady() {
+            var part = new UVoicePart { trackNo = 0, position = 480, duration = 480 };
+
+            var edited = DawAudio.ReadPart(NewPlanner(part), part, new[] { (2UL, 0.0, (double)RampDurationMs) }, 500, 1000);
+
+            Assert.Equal(DawAudio.PartState.Rendering, edited.State);
+        }
+
+        [Fact]
+        public void AReadPartDoesNotMixOnceAPhraseIsDropped() {
+            var part = new UVoicePart { trackNo = 0, position = 0, duration = 480 };
+            var planner = new MixPlanner();
+            planner.BeginSession(new[] {
+                new MixPlanner.SlotSpec(part, 0, 1, 0, 250, 2),
+                new MixPlanner.SlotSpec(part, 0, 2, 250, 250, 2),
+            });
+            var pcm = new float[DawAudio.MsToInterleavedIndex(250)];
+            planner.RegisterPcm(part, 1, 0, 250, 2, pcm);
+            planner.RegisterPcm(part, 2, 250, 250, 2, pcm);
+            var audio = DawAudio.ReadPart(planner, part, new[] { (1UL, 0.0, 250.0), (2UL, 250.0, 500.0) }, 0, 500);
+            Assert.True(audio.TryMix(out _));
+
+            planner.MarkFailed(part, 2);
+
+            Assert.False(audio.TryMix(out _));
+        }
+
+        [Fact]
+        public void AReadPartMixesWhatExtractionGives() {
+            var project = NewProject();
+            var part = new UVoicePart { trackNo = 0, position = 480, duration = 480 };
+            var planner = NewPlanner(part);
+
+            Assert.True(DawAudio.TryExtractPart(project, part, planner, Placements(), out float[] extracted));
+            Assert.True(DawAudio.ReadPart(planner, part, Placements(), 500, 1000).TryMix(out float[] mixed));
+
+            Assert.Equal(extracted, mixed);
+        }
     }
 }
