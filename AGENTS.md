@@ -4,13 +4,13 @@ This is KolibreKrit's fork of [OpenUtau](https://github.com/openutau/OpenUtau).
 
 ## What the fork is for
 
-`svcover-embedding` is the fork's working branch. [SVCoverEditor](https://github.com/KolibreKrit/SVCoverEditor) uses it as its vocal source. Its design page there is `docs/design/openutau.md`.
+`svcover-embedding` is the fork's working branch. The app [SVCoverEditor](https://github.com/KolibreKrit/SVCoverEditor) uses it as its vocal source. Its design page there is `docs/design/openutau.md`.
 
 `master` stays identical to openutau/OpenUtau's master. It never gets fork-only commits, and that includes this file.
 
 ## PRs and merging
 
-PRs target `svcover-embedding`. Merge them with a merge commit, not a squash or a rebase, as PR #1 was. That keeps the SHAs SVCoverEditor pins, and it keeps the commits meant for upstream intact.
+PRs target `svcover-embedding`. Merge them with a merge commit, not a squash or a rebase, as PR #1 was. That keeps the SHAs the app pins, and it keeps the commits meant for upstream intact.
 
 ## Work that could go upstream
 
@@ -24,7 +24,7 @@ Merge openutau/OpenUtau's master into `svcover-embedding`, as 4591c69 did. Once 
 
 ## After a merge into `svcover-embedding`
 
-SVCoverEditor builds the commit its `config/build.json` pins, not the branch. A merge reaches the app only once that pin moves to the merge commit. Say so when handing back, so the owner or the SVCoverEditor thread moves the pin.
+The app builds the commit its `config/build.json` pins, not the branch. A merge reaches the app only once that pin moves to the merge commit. When handing back, tell the owner the pin needs moving.
 
 Don't build or install the fork as a standalone OpenUtau app. The installed OpenUtau stays an official release.
 
