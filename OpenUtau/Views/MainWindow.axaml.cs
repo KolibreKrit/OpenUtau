@@ -2121,8 +2121,8 @@ namespace OpenUtau.App.Views {
                 MessageBox.MessageBoxButtons.YesNoCancel);
             switch (result) {
                 case MessageBox.MessageBoxResult.Yes:
-                    await Save();
-                    goto case MessageBox.MessageBoxResult.No;
+                    // Continue only if the changes were saved, or they would be lost.
+                    return await Save();
                 case MessageBox.MessageBoxResult.No:
                     return true; // Continue.
                 default:

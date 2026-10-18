@@ -182,6 +182,53 @@ namespace OpenUtau.UiTest {
             }
         }
 
+        [Fact]
+        public void ClosingStaysOpenWhenTheSaveFails() {
+            var directory = Path.Combine(Path.GetTempPath(), "OpenUtauUiSaveTest", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            var savedPath = Path.Combine(directory, "song.ustx");
+            var recentFiles = Preferences.Default.RecentFiles.ToList();
+            try {
+                WithMainWindow(nameof(ClosingStaysOpenWhenTheSaveFails), window => {
+                    var viewModel = ViewModelOf(window);
+                    Click(window, FindButtonWithText(window, "welcome.new"));
+                    Assert.True(viewModel.SaveProject(savedPath));
+                    var project = DocManager.Inst.Project;
+                    DocManager.Inst.StartUndoGroup();
+                    DocManager.Inst.ExecuteCmd(new RenameTrackCommand(project, project.tracks[0], "Renamed"));
+                    DocManager.Inst.EndUndoGroup();
+                    File.SetAttributes(savedPath, FileAttributes.ReadOnly);
+
+                    // Close, and answer Yes to saving the changes.
+                    window.Close();
+                    HeadlessUi.Flush();
+                    var ask = Assert.Single(window.OwnedWindows.OfType<MessageBox>());
+                    var yes = FindButtonWithText(ask, "button.yes");
+                    yes.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+                    HeadlessUi.Flush();
+
+                    // The save failed: the error shows, and the window and its changes stay.
+                    var errorBox = Assert.Single(window.OwnedWindows.OfType<MessageBox>());
+                    errorBox.Close();
+                    HeadlessUi.Flush();
+                    Assert.True(window.IsVisible);
+                    Assert.False(DocManager.Inst.ChangesSaved);
+                    Assert.Contains(HeadlessUi.Errors.Snapshot(), error => error.Contains(savedPath));
+                    HeadlessUi.Errors.Clear();
+
+                    File.SetAttributes(savedPath, FileAttributes.Normal);
+                    Assert.True(viewModel.SaveProject());
+                });
+            } finally {
+                Preferences.Default.RecentFiles = recentFiles;
+                Preferences.Save();
+                if (File.Exists(savedPath)) {
+                    File.SetAttributes(savedPath, FileAttributes.Normal);
+                }
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+
         class FakeSinger : USinger {
             readonly string name;
             public FakeSinger(string name) {
