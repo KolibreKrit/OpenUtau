@@ -13,8 +13,8 @@ namespace OpenUtau.Core.DawIntegration {
     public enum DawSyncKind {
         Ustx = 0,
         Tracks = 1,
-        PartLayout = 2,
-        ProjectInfo = 3,
+        ProjectInfo = 2,
+        PartLayout = 3,
     }
 
     /// <summary>
