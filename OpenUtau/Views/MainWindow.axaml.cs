@@ -399,24 +399,25 @@ namespace OpenUtau.App.Views {
         }
 
         async void OnMenuSave(object sender, RoutedEventArgs args) => await Save();
-        public async Task Save() {
+        /// <summary>Saves the project, asking for a file if it has none. False if it wasn't saved.</summary>
+        public async Task<bool> Save() {
             if (!viewModel.ProjectSaved) {
-                await SaveAs();
-            } else {
-                viewModel.SaveProject();
-                string message = ThemeManager.GetString("progress.saved");
-                message = string.Format(message, DateTime.Now);
-                DocManager.Inst.ExecuteCmd(new ProgressBarNotification(0, message));
+                return await SaveAs();
             }
+            if (!viewModel.SaveProject()) {
+                return false;
+            }
+            string message = ThemeManager.GetString("progress.saved");
+            message = string.Format(message, DateTime.Now);
+            DocManager.Inst.ExecuteCmd(new ProgressBarNotification(0, message));
+            return true;
         }
 
         async void OnMenuSaveAs(object sender, RoutedEventArgs args) => await SaveAs();
-        async Task SaveAs() {
+        async Task<bool> SaveAs() {
             var file = await FilePicker.SaveFileAboutProject(
                 this, "menu.file.saveas", FilePicker.USTX);
-            if (!string.IsNullOrEmpty(file)) {
-                viewModel.SaveProject(file);
-            }
+            return !string.IsNullOrEmpty(file) && viewModel.SaveProject(file);
         }
 
         void OnMenuSaveTemplate(object sender, RoutedEventArgs args) {
@@ -2120,8 +2121,8 @@ namespace OpenUtau.App.Views {
                 MessageBox.MessageBoxButtons.YesNoCancel);
             switch (result) {
                 case MessageBox.MessageBoxResult.Yes:
-                    await Save();
-                    goto case MessageBox.MessageBoxResult.No;
+                    // Continue only if the changes were saved, or they would be lost.
+                    return await Save();
                 case MessageBox.MessageBoxResult.No:
                     return true; // Continue.
                 default:

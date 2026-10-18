@@ -107,6 +107,11 @@ namespace OpenUtau.Core {
         public string NotePresetsFilePath => Path.Combine(DataPath, "notepresets.json");
         public string BackupsPath => Path.Combine(DataPath, "Backups");
 
+        /// <summary>Test seam: keeps OpenUtau's data, prefs.json among it, in the given folder.</summary>
+        internal void SetDataPathForTest(string dataPath) {
+            DataPath = dataPath;
+        }
+
         public List<string> SingersPaths {
             get {
                 var list = new List<string> { SingersPath };

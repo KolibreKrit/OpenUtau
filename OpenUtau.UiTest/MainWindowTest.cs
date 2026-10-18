@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -60,6 +61,12 @@ namespace OpenUtau.UiTest {
                     HeadlessUi.Flush();
                     HeadlessUi.SaveScreenshot(window, name);
                     window.Close();
+                    // Closing the main window quits the app, so nothing else unsubscribes it. Left subscribed,
+                    // it would show a later test's errors over a closed window, which throws.
+                    DocManager.Inst.RemoveSubscriber(window);
+                    if (window.DataContext is MainWindowViewModel viewModel) {
+                        DocManager.Inst.RemoveSubscriber(viewModel);
+                    }
                 }
             });
         }
@@ -121,6 +128,105 @@ namespace OpenUtau.UiTest {
                 AssertHasSize(window.FindControl<Control>("partsCanvas"));
                 AssertRendered(window);
             });
+        }
+
+        [Fact]
+        public void FailedSaveAsLeavesTheProjectWhereItWas() {
+            var directory = Path.Combine(Path.GetTempPath(), "OpenUtauUiSaveTest", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            var savedPath = Path.Combine(directory, "song.ustx");
+            // A file that can't be overwritten, so a failed save would otherwise reach Recent Files.
+            var lockedPath = Path.Combine(directory, "locked.ustx");
+            File.WriteAllText(lockedPath, "locked");
+            File.SetAttributes(lockedPath, FileAttributes.ReadOnly);
+            var recentFiles = Preferences.Default.RecentFiles.ToList();
+            try {
+                WithMainWindow(nameof(FailedSaveAsLeavesTheProjectWhereItWas), window => {
+                    var viewModel = ViewModelOf(window);
+                    Click(window, FindButtonWithText(window, "welcome.new"));
+                    Assert.True(viewModel.SaveProject(savedPath));
+                    var project = DocManager.Inst.Project;
+                    DocManager.Inst.StartUndoGroup();
+                    DocManager.Inst.ExecuteCmd(new RenameTrackCommand(project, project.tracks[0], "Renamed"));
+                    DocManager.Inst.EndUndoGroup();
+                    HeadlessUi.Flush();
+                    var title = viewModel.Title;
+                    Assert.StartsWith("*", title);
+
+                    // What Save As does once a file is picked.
+                    Assert.False(viewModel.SaveProject(lockedPath));
+                    HeadlessUi.Flush();
+
+                    Assert.Equal(title, viewModel.Title);
+                    Assert.DoesNotContain(lockedPath, Preferences.Default.RecentFiles);
+                    Assert.Equal("locked", File.ReadAllText(lockedPath));
+                    // The error shows as before.
+                    var errorBox = Assert.Single(window.OwnedWindows.OfType<MessageBox>());
+                    errorBox.Close();
+                    Assert.Contains(HeadlessUi.Errors.Snapshot(), error => error.Contains(lockedPath));
+                    HeadlessUi.Errors.Clear();
+
+                    // Save writes the file the project came from.
+                    File.Delete(savedPath);
+                    var save = window.Save();
+                    HeadlessUi.Flush();
+                    Assert.True(save.IsCompletedSuccessfully && save.Result);
+                    Assert.True(File.Exists(savedPath));
+                    Assert.Equal(title.Substring(1), viewModel.Title);
+                });
+            } finally {
+                Preferences.Default.RecentFiles = recentFiles;
+                Preferences.Save();
+                File.SetAttributes(lockedPath, FileAttributes.Normal);
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+
+        [Fact]
+        public void ClosingStaysOpenWhenTheSaveFails() {
+            var directory = Path.Combine(Path.GetTempPath(), "OpenUtauUiSaveTest", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            var savedPath = Path.Combine(directory, "song.ustx");
+            var recentFiles = Preferences.Default.RecentFiles.ToList();
+            try {
+                WithMainWindow(nameof(ClosingStaysOpenWhenTheSaveFails), window => {
+                    var viewModel = ViewModelOf(window);
+                    Click(window, FindButtonWithText(window, "welcome.new"));
+                    Assert.True(viewModel.SaveProject(savedPath));
+                    var project = DocManager.Inst.Project;
+                    DocManager.Inst.StartUndoGroup();
+                    DocManager.Inst.ExecuteCmd(new RenameTrackCommand(project, project.tracks[0], "Renamed"));
+                    DocManager.Inst.EndUndoGroup();
+                    File.SetAttributes(savedPath, FileAttributes.ReadOnly);
+
+                    // Close, and answer Yes to saving the changes.
+                    window.Close();
+                    HeadlessUi.Flush();
+                    var ask = Assert.Single(window.OwnedWindows.OfType<MessageBox>());
+                    var yes = FindButtonWithText(ask, "button.yes");
+                    yes.RaiseEvent(new Avalonia.Interactivity.RoutedEventArgs(Button.ClickEvent));
+                    HeadlessUi.Flush();
+
+                    // The save failed: the error shows, and the window and its changes stay.
+                    var errorBox = Assert.Single(window.OwnedWindows.OfType<MessageBox>());
+                    errorBox.Close();
+                    HeadlessUi.Flush();
+                    Assert.True(window.IsVisible);
+                    Assert.False(DocManager.Inst.ChangesSaved);
+                    Assert.Contains(HeadlessUi.Errors.Snapshot(), error => error.Contains(savedPath));
+                    HeadlessUi.Errors.Clear();
+
+                    File.SetAttributes(savedPath, FileAttributes.Normal);
+                    Assert.True(viewModel.SaveProject());
+                });
+            } finally {
+                Preferences.Default.RecentFiles = recentFiles;
+                Preferences.Save();
+                if (File.Exists(savedPath)) {
+                    File.SetAttributes(savedPath, FileAttributes.Normal);
+                }
+                Directory.Delete(directory, recursive: true);
+            }
         }
 
         class FakeSinger : USinger {

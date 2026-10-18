@@ -287,12 +287,15 @@ namespace OpenUtau.App.ViewModels {
             }
         }
 
-        public void SaveProject(string file = "") {
+        /// <summary>Saves to the file, or to the project's own file if empty. False if it couldn't.</summary>
+        public bool SaveProject(string file = "") {
             if (file == null) {
-                return;
+                return false;
             }
-            DocManager.Inst.ExecuteCmd(new SaveProjectNotification(file));
+            var save = new SaveProjectNotification(file);
+            DocManager.Inst.ExecuteCmd(save);
             this.RaisePropertyChanged(nameof(Title));
+            return save.Saved;
         }
 
         public void ImportTracks(UProject[] loadedProjects, bool importTempo){

@@ -576,14 +576,12 @@ namespace OpenUtau.App.Embedding {
         /// <summary>Saves the project to its file, as OpenUtau's Save does. False if the project has no file or
         /// OpenUtau couldn't write it, which OpenUtau itself only reports in a message.</summary>
         public static bool Save() {
-            var project = DocManager.Inst.Project;
-            if (string.IsNullOrEmpty(project.FilePath)) {
+            if (string.IsNullOrEmpty(DocManager.Inst.Project.FilePath)) {
                 return false;
             }
-            // OpenUtau marks the project saved once it has written the file. Until then its changes stay unsaved.
-            project.Saved = false;
-            DocManager.Inst.ExecuteCmd(new SaveProjectNotification(""));
-            return project.Saved;
+            var save = new SaveProjectNotification("");
+            DocManager.Inst.ExecuteCmd(save);
+            return save.Saved;
         }
 
         /// <summary>Dialogs need an owner window that is showing, and the embedded piano roll has none, so a tiny
