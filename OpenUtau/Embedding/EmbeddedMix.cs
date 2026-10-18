@@ -28,8 +28,8 @@ namespace OpenUtau.App.Embedding {
         static Action<string>? receiver;
         static Subscriber? subscriber;
         static bool scheduled, polling, documentChanged = true;
-        // OpenUtau's last render pass failed, so the parts it left unrendered wait for another pass, which an edit or
-        // a play starts.
+        // OpenUtau's last render pass failed, so the parts it left unrendered wait for another pass, which an edit,
+        // Undo or Redo starts. The application's playback doesn't, as OpenUtau doesn't play.
         static bool renderFailed;
         static DateTime ustxSentAt = DateTime.MinValue;
         static string? lastSent;

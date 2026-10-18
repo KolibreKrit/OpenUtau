@@ -355,7 +355,8 @@ namespace OpenUtau.App.Embedding {
         /// a change to the project and left out otherwise. A part renders again after each edit to it. Until it has,
         /// it is listed with its last audio, or left out if it has never rendered, and <c>rendering</c> counts it. If
         /// OpenUtau's render pass failed, <c>failed</c> counts the parts it left in place of <c>rendering</c> until
-        /// an edit or a play starts another. A part with no notes to sing is left out. <see cref="ReadPartAudio"/> gives each part's audio by its hash.
+        /// another pass starts, as an edit, Undo or Redo starts one. The application's playback doesn't. A part with
+        /// no notes to sing is left out. <see cref="ReadPartAudio"/> gives each part's audio by its hash.
         /// </summary>
         [UnmanagedCallersOnly]
         public static int SetMix(IntPtr function) => Guard("set mix", () => {
