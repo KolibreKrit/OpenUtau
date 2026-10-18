@@ -72,6 +72,18 @@ namespace OpenUtau.Core {
             Project = project;
             return previous;
         }
+
+        /// <summary>
+        /// Test seam: makes commands run inline on the given thread, as they run on
+        /// the UI thread in the app; returns the previous one for restoration.
+        /// </summary>
+        internal Thread TakeMainThreadForTest(Thread thread) {
+            var previous = mainThread;
+            mainThread = thread;
+            Util.ThreadGuard.SetUiThread(thread);
+            return previous;
+        }
+
         public Plugin[] Plugins { get; private set; }
         public PhonemizerFactory[] PhonemizerFactories { get; private set; }
         public UProject Project { get; private set; }
@@ -277,13 +289,16 @@ namespace OpenUtau.Core {
             Util.ThreadGuard.AssertUi();
             if (cmd is UNotification) {
                 if (cmd is SaveProjectNotification saveProjectNotif) {
+                    string path = string.IsNullOrEmpty(saveProjectNotif.Path)
+                        ? Project.FilePath
+                        : saveProjectNotif.Path;
+                    if (!Format.Ustx.Save(path, Project)) {
+                        // The error is shown. The project keeps its file and its unsaved changes.
+                        return;
+                    }
+                    saveProjectNotif.Saved = true;
                     if (undoQueue.Count > 0) {
                         savedPoint = undoQueue.Last();
-                    }
-                    if (string.IsNullOrEmpty(saveProjectNotif.Path)) {
-                        Format.Ustx.Save(Project.FilePath, Project);
-                    } else {
-                        Format.Ustx.Save(saveProjectNotif.Path, Project);
                     }
                 } else if (cmd is LoadProjectNotification notification) {
                     undoQueue.Clear();

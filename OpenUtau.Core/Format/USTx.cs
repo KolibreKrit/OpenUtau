@@ -106,9 +106,15 @@ namespace OpenUtau.Core.Format {
             return project;
         }
 
-        public static void Save(string filePath, UProject project) {
+        /// <summary>
+        /// Writes the project to a file. Returns false, after showing the error, if it couldn't,
+        /// and then leaves the project's path as it was.
+        /// </summary>
+        public static bool Save(string filePath, UProject project) {
+            string previousPath = project.FilePath;
             try {
                 project.ustxVersion = kUstxVersion;
+                // Wave parts store paths relative to the file being written.
                 project.FilePath = filePath;
                 project.BeforeSave();
                 File.WriteAllText(filePath, Yaml.DefaultSerializer.Serialize(project), Encoding.UTF8);
@@ -117,9 +123,13 @@ namespace OpenUtau.Core.Format {
                 Preferences.Default.RecoveryPath = string.Empty;
                 Preferences.Save();
                 DocManager.Inst.Recovered = false;
+                return true;
             } catch (Exception ex) {
+                project.FilePath = previousPath;
+                project.AfterSave();
                 var e = new MessageCustomizableException($"Failed to save ustx: {filePath}", $"<translate:errors.failed.save>: {filePath}", ex);
                 DocManager.Inst.ExecuteCmd(new ErrorMessageNotification(e));
+                return false;
             }
         }
 

@@ -107,8 +107,14 @@ namespace OpenUtau.Core {
         public override string ToString() => "Load project";
     }
 
+    /// <summary>
+    /// Saves the project to <see cref="Path"/>, or to its own file if empty. Subscribers hear
+    /// of it only once the file is written.
+    /// </summary>
     public class SaveProjectNotification : UNotification {
         public string Path;
+        /// <summary>Whether the file was written, once the command has run.</summary>
+        public bool Saved { get; internal set; }
         public SaveProjectNotification(string path) {
             Path = path;
         }
