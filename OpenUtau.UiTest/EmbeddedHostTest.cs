@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
@@ -379,6 +380,43 @@ namespace OpenUtau.UiTest {
                 }
             });
         }
+
+        [Fact]
+        public void SaveIsFalseWhenOpenUtauCouldntWriteTheFile() => HeadlessUi.Run(() => {
+            MainWindowTest.InitCore();
+            var directory = Path.Combine(Path.GetTempPath(), "OpenUtauEmbeddedSaveTest", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            var path = Path.Combine(directory, "song.ustx");
+            try {
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
+                DocManager.Inst.ExecuteCmd(new SaveProjectNotification(path));
+                var project = DocManager.Inst.Project;
+                DocManager.Inst.StartUndoGroup();
+                DocManager.Inst.ExecuteCmd(new RenameTrackCommand(project, project.tracks[0], "Renamed"));
+                DocManager.Inst.EndUndoGroup();
+                File.SetAttributes(path, FileAttributes.ReadOnly);
+                HeadlessUi.Errors.Clear();
+
+                // SaveProject, which the app calls, reports this to the app as an error.
+                Assert.False(EmbeddedHost.Save());
+                Assert.False(DocManager.Inst.ChangesSaved);
+                Assert.Equal(path, project.FilePath);
+                // The project has still been saved to its file before.
+                Assert.True(project.Saved);
+                Assert.Contains(HeadlessUi.Errors.Snapshot(), error => error.Contains(path));
+
+                File.SetAttributes(path, FileAttributes.Normal);
+                Assert.True(EmbeddedHost.Save());
+                Assert.True(DocManager.Inst.ChangesSaved);
+            } finally {
+                HeadlessUi.Errors.Clear();
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
+                if (File.Exists(path)) {
+                    File.SetAttributes(path, FileAttributes.Normal);
+                }
+                Directory.Delete(directory, recursive: true);
+            }
+        });
 
         [Fact]
         public void DialogOwnerShowsOnlyWhileItOwnsAWindow() => HeadlessUi.Run(() => {
