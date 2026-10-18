@@ -437,6 +437,28 @@ namespace OpenUtau.Core.DawIntegration {
             Assert.Equal("first", plugin.ProjectInfo.Name);
         }
 
+        /// <summary>
+        /// File > New, then saving over the file that was open. The path matches the USTX the
+        /// plugin holds, but that USTX is the old project's.
+        /// </summary>
+        [Fact]
+        public async Task SavingANewProjectOverTheOldFileSendsEveryStream() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            string oldPath = project.FilePath;
+            NewProject(openutau);
+            await openutau.PumpOnceAsync();
+            int before = plugin.Received.Count;
+
+            Save(openutau, oldPath);
+            await openutau.PumpOnceAsync();
+
+            Assert.Equal(
+                new[] { DawMessageKind.UpdateUstx, DawMessageKind.UpdateTracks, DawMessageKind.UpdateProjectInfo, DawMessageKind.UpdatePartLayout },
+                plugin.Received.Skip(before).ToArray());
+            Assert.Equal(DawUstx.Serialize(project), plugin.Ustx);
+        }
+
         [Fact]
         public async Task SavingUnderTheSamePathSendsOnlyProjectInfo() {
             var openutau = NewManager();
