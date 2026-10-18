@@ -365,6 +365,9 @@ Implementations **MUST NOT** invent wire shapes for this direction under the v1 
 updateUstx → updateTracks → updateProjectInfo → updatePartLayout (+ audio pulls)
 ```
 
+- **Failures:** a stream that OpenUtau fails to build is skipped, and the streams due with
+  it still go out. The skipped stream is sent again on its next change.
+
 ## 8. Audio Path Contract
 
 - The wire audio is **pre-fader**: OpenUtau's `volume`, `pan` and `muted` fields are not

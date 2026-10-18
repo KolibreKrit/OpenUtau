@@ -596,20 +596,32 @@ namespace OpenUtau.Core.DawIntegration {
                 return;
             }
             try {
-                foreach (var kind in scheduler.TryTake(NowUtc())) {
-                    if (!IsConnected) {
-                        break;
-                    }
-                    await SyncAsync(kind, cancellation);
-                }
+                await SyncTakenAsync(scheduler.TryTake(NowUtc()), cancellation);
             } catch (OperationCanceledException) {
                 // Shutting down.
-            } catch (Exception e) {
-                // A refused envelope or a serialization fault leaves the stream coherent, so the
-                // connection survives and the stream is retried on the next edit.
-                Log.Error(e, "DAW: sync failed.");
             } finally {
                 syncGate.Release();
+            }
+        }
+
+        /// <summary>
+        /// Sends streams already taken off the scheduler, in order. Send failures are handled
+        /// per connection by <see cref="BroadcastAsync"/>, so what reaches the catch is a payload
+        /// that failed to build. That stream is logged and goes out again on its next trigger;
+        /// the ones after it are taken too, so stopping would leave them stale.
+        /// </summary>
+        private async Task SyncTakenAsync(DawSyncKind[] kinds, CancellationToken cancellation) {
+            foreach (var kind in kinds) {
+                if (!IsConnected) {
+                    break;
+                }
+                try {
+                    await SyncAsync(kind, cancellation);
+                } catch (OperationCanceledException) {
+                    throw;
+                } catch (Exception e) {
+                    Log.Error(e, $"DAW: {kind} sync failed.");
+                }
             }
         }
 
@@ -1103,9 +1115,7 @@ namespace OpenUtau.Core.DawIntegration {
                 // than replayed by the next pump tick (§9: the DAW keeps the final state).
                 scheduler.FlushPending(NowUtc());
                 try {
-                    foreach (var kind in scheduler.TryTake(NowUtc())) {
-                        await SyncAsync(kind);
-                    }
+                    await SyncTakenAsync(scheduler.TryTake(NowUtc()), CancellationToken.None);
                 } catch (Exception e) {
                     Log.Warning(e, "DAW: the final sync before closing failed.");
                 }

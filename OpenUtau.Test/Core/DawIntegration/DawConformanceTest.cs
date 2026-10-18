@@ -332,6 +332,45 @@ namespace OpenUtau.Core.DawIntegration {
             Assert.Equal(1, plugin.Received.Count(kind => kind == DawMessageKind.Init));
         }
 
+        [Fact]
+        public async Task FailedStreamDoesNotDropTheStreamsAfterIt() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            int connectMessages = plugin.Received.Count;
+            BreakUstx();
+
+            openutau.Scheduler.RequestFullSync(now);
+            await openutau.PumpOnceAsync();
+
+            Assert.Equal(
+                new[] { DawMessageKind.UpdateTracks, DawMessageKind.UpdateProjectInfo, DawMessageKind.UpdatePartLayout },
+                plugin.Received.Skip(connectMessages).ToArray());
+            Assert.True(openutau.IsConnected);
+        }
+
+        [Fact]
+        public async Task FailedStreamDoesNotDropTheRestOfTheFinalSync() {
+            var openutau = NewManager();
+            await openutau.ConnectAsync(plugin.Advertisement);
+            int connectMessages = plugin.Received.Count;
+            BreakUstx();
+
+            openutau.Scheduler.RequestFullSync(now);
+            await openutau.DisconnectAsync();
+
+            Assert.Equal(
+                new[] { DawMessageKind.UpdateTracks, DawMessageKind.UpdateProjectInfo, DawMessageKind.UpdatePartLayout },
+                plugin.Received.Skip(connectMessages).ToArray());
+        }
+
+        /// <summary>
+        /// A wave part with no file cannot be made relative to the project, so the USTX, the
+        /// first stream sent, fails to serialize while every other stream still builds.
+        /// </summary>
+        private void BreakUstx() {
+            project.parts.Add(new UWavePart { trackNo = 0 });
+        }
+
         private void AssertPulledMatchesPart(DawPartLayout advertised, UVoicePart part) {
             Assert.True(DawAudio.TryExtractPart(project, part, out float[] expected));
             Assert.Equal(expected, DawAudio.FromPcmBytes(plugin.Pulled[advertised.AudioHash]));
