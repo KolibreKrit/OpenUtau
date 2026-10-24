@@ -539,6 +539,56 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        // Notes each part whose phonemes arrive though the open project doesn't have it.
+        sealed class ForeignPhonemes : ICmdSubscriber {
+            public readonly List<UPart> parts = new();
+            public void OnNext(UCommand cmd, bool isUndo) {
+                if (cmd is PhonemizedNotification phonemized && !DocManager.Inst.Project.parts.Contains(phonemized.part)) {
+                    parts.Add(phonemized.part);
+                }
+            }
+        }
+
+        [Fact]
+        public void ImportSendsTheOpenProjectNoPhonemes() {
+            // Importers validate the project they read, and OpenUtau's phonemizer answers through the open project.
+            // Answers for an import's parts would start a render and tell the app of changes it doesn't have.
+            const string svp = "{\"version\":197,\"time\":{\"meter\":[{\"index\":0,\"numerator\":4,\"denominator\":4}]," +
+                "\"tempo\":[{\"position\":0,\"bpm\":120.0}]},\"tracks\":[{\"name\":\"Lead\",\"mainGroup\":{" +
+                "\"uuid\":\"lead\",\"name\":\"main\",\"notes\":[" +
+                "{\"onset\":0,\"duration\":705600000,\"lyrics\":\"la\",\"pitch\":64}," +
+                "{\"onset\":705600000,\"duration\":705600000,\"lyrics\":\"la\",\"pitch\":62}]}," +
+                "\"mainRef\":{\"groupID\":\"lead\",\"blickOffset\":0,\"database\":{\"name\":\"Kevin\"}," +
+                "\"voice\":{\"mouthOpening\":0}}}]}";
+            var project = Project(out var first, out _);
+            var foreign = new ForeignPhonemes();
+            var folder = Path.Combine(Path.GetTempPath(), "OpenUtauEmbeddedImportTest", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            WithPianoRoll(project, first, pianoRoll => {
+                try {
+                    WaitForPhonemes(project);
+                    DocManager.Inst.AddSubscriber(foreign);
+                    var source = Path.Combine(folder, "song.svp");
+                    File.WriteAllText(source, svp);
+                    EmbeddedHost.Import(source, Path.Combine(folder, "song.ustx"));
+                    Assert.True(File.Exists(Path.Combine(folder, "song.ustx")));
+
+                    // The phonemizer takes requests in order, and answers a batch of them at once, so answers for the
+                    // import arrive by the time an edit made after it has its phonemes, or straight after.
+                    ChangeLyric(first, "o");
+                    WaitForPhonemes(project);
+                    for (int i = 0; i < 20; ++i) {
+                        Thread.Sleep(10);
+                        HeadlessUi.Flush();
+                    }
+                    Assert.Empty(foreign.parts);
+                } finally {
+                    DocManager.Inst.RemoveSubscriber(foreign);
+                    Directory.Delete(folder, recursive: true);
+                }
+            });
+        }
+
         [Fact]
         public void SaveIsFalseWhenOpenUtauCouldntWriteTheFile() => HeadlessUi.Run(() => {
             MainWindowTest.InitCore();

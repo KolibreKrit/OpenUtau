@@ -99,6 +99,22 @@ namespace OpenUtau.Core {
         internal void SetPhonemizerRunnerForTest(PhonemizerRunner runner) {
             PhonemizerRunner = runner;
         }
+
+        /// <summary>
+        /// Runs <paramref name="read"/> without the phonemizer runner, for a project that won't be opened, such as
+        /// one the embedded host imports as a file. Importers validate the project they read, which asks the runner
+        /// for phonemes, and the runner answers through the open project. Call it on the main thread, where edits
+        /// validate, so that no edit's request goes missing meanwhile.
+        /// </summary>
+        public T ReadWithoutPhonemizing<T>(Func<T> read) {
+            var runner = PhonemizerRunner;
+            PhonemizerRunner = null!;
+            try {
+                return read();
+            } finally {
+                PhonemizerRunner = runner;
+            }
+        }
         public List<Type> ExternalBatchEditTypes { get; private set; } = new List<Type>();
 
         public void Initialize(Thread mainThread, TaskScheduler mainScheduler) {

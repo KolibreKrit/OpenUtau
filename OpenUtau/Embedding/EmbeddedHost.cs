@@ -253,7 +253,8 @@ namespace OpenUtau.App.Embedding {
             if (File.Exists(destination)) {
                 throw new IOException($"\"{destination}\" already exists");
             }
-            var project = Core.Format.Formats.ReadProject(new[] { source })
+            // The phonemizer would answer the importer's requests through the open project.
+            var project = DocManager.Inst.ReadWithoutPhonemizing(() => Core.Format.Formats.ReadProject(new[] { source }))
                 ?? throw new InvalidDataException($"No project in \"{source}\"");
             project.ustxVersion = Core.Format.Ustx.kUstxVersion;
             project.FilePath = destination;
