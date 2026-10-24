@@ -32,6 +32,15 @@ namespace OpenUtau.Core.Format {
         }
 
         [Fact]
+        public void TracksAreTheSvpsOwn() {
+            // No empty track from the new project comes before them.
+            var project = SVP.Load(Path.Join(basePath, "instrumental.svp"));
+
+            Assert.Equal(new[] { "Audio" }, project.tracks.Select(track => track.TrackName));
+            Assert.Equal(0, Assert.Single(project.parts).trackNo);
+        }
+
+        [Fact]
         public void MissingAudioKeepsDeclaredDuration() {
             // The SVP declares the audio length, so a track whose file is absent keeps
             // its place and its length instead of being dropped on import.
