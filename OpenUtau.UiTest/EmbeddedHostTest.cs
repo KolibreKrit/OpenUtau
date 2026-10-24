@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Threading;
 using OpenUtau.App.Controls;
 using OpenUtau.App.Embedding;
 using OpenUtau.App.ViewModels;
@@ -654,6 +655,43 @@ namespace OpenUtau.UiTest {
             expressions.Close();
             HeadlessUi.Flush();
             Assert.False(owner.IsVisible);
+        });
+
+        [Fact]
+        public void PumpRunsTheJobsWaitingWhenItIsCalled() => HeadlessUi.Run(() => {
+            HeadlessUi.Flush();
+            var ran = new List<DispatcherPriority>();
+            foreach (var priority in new[] { DispatcherPriority.Background, DispatcherPriority.Input, DispatcherPriority.Normal }) {
+                Dispatcher.UIThread.Post(() => ran.Add(priority), priority);
+            }
+
+            EmbeddedHost.RunPending();
+
+            Assert.Equal(new[] { DispatcherPriority.Normal, DispatcherPriority.Input, DispatcherPriority.Background }, ran);
+        });
+
+        // The headless dispatcher can't ask whether input waits, so it stops running a stream of Input jobs after
+        // 50 ms, as X11 input arriving would, and Pump's own job still waits behind the stream.
+        [Fact]
+        public void PumpReturnsDuringAStreamOfInput() => HeadlessUi.Run(() => {
+            HeadlessUi.Flush();
+            bool streaming = true;
+            int handled = 0;
+            void Next() {
+                ++handled;
+                if (streaming) {
+                    Dispatcher.UIThread.Post(Next, DispatcherPriority.Input);
+                }
+            }
+            Dispatcher.UIThread.Post(Next, DispatcherPriority.Input);
+            var watch = Stopwatch.StartNew();
+
+            EmbeddedHost.RunPending();
+            streaming = false;
+            HeadlessUi.Flush();
+
+            Assert.InRange(watch.ElapsedMilliseconds, 40, 2000);
+            Assert.True(handled > 1);
         });
     }
 }
