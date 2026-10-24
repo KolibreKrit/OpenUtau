@@ -14,6 +14,7 @@ using Avalonia.Controls.Embedding;
 using Avalonia.Media;
 using Avalonia.Platform;
 using Avalonia.Threading;
+using Avalonia.X11;
 using OpenUtau.App.Controls;
 using OpenUtau.App.ViewModels;
 using OpenUtau.Audio;
@@ -27,12 +28,14 @@ using Serilog;
 
 namespace OpenUtau.App.Embedding {
     /// <summary>
-    /// Lets a native macOS application show OpenUtau's piano roll inside its own window.
+    /// Lets a native macOS or Linux application show OpenUtau's piano roll inside its own window.
     /// The application starts the .NET runtime with OpenUtau.dll as the app, then calls these
     /// entry points on its main thread. OpenUtau opens no windows of its own, except dialogs.
     /// </summary>
     public static class EmbeddedHost {
         static EmbeddableControlRoot? root;
+        // On Linux, the XEmbed client window that shows root.
+        static XEmbedPlug? plug;
         static PianoRoll? pianoRoll;
         static Window? dialogOwner;
         static bool ready;
@@ -128,7 +131,8 @@ namespace OpenUtau.App.Embedding {
         }
 
         /// <summary>Starts Avalonia and OpenUtau without any OpenUtau window. A null data path
-        /// uses OpenUtau's usual data folder.</summary>
+        /// uses OpenUtau's usual data folder. On Linux, Avalonia runs on X11, and its events wait for
+        /// <see cref="Pump"/>.</summary>
         [UnmanagedCallersOnly]
         public static int Start(IntPtr dataPath, IntPtr cachePath) => Guard("start", () => {
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -137,7 +141,12 @@ namespace OpenUtau.App.Embedding {
             Program.InitLogging();
             Log.Information($"Embedded OpenUtau. Data path = {PathManager.Inst.DataPath}");
             App.Embedded = true;
-            Program.BuildAvaloniaApp()
+            var builder = Program.BuildAvaloniaApp();
+            if (OperatingSystem.IsLinux()) {
+                // XEmbed, which puts the piano roll in the application's window, is X11's. Wayland has none.
+                builder.UseX11();
+            }
+            builder
                 .With(new MacOSPlatformOptions {
                     DisableAvaloniaAppDelegate = true,
                     DisableNativeMenus = true,
@@ -197,14 +206,15 @@ namespace OpenUtau.App.Embedding {
             }, CancellationToken.None, TaskContinuationOptions.None, mainScheduler);
         });
 
-        /// <summary>Returns a retained NSView showing the piano roll, for the application to add
-        /// to its own view hierarchy.</summary>
+        /// <summary>Returns the view showing the piano roll, the same view each time, for the application to add to
+        /// its own window. On macOS it is a retained NSView for the application's view hierarchy. On Linux it is the
+        /// X11 window of an XEmbed client, for an XEmbed embedder in the application's window to take.</summary>
         [UnmanagedCallersOnly]
         public static IntPtr CreateView() {
             IntPtr view = IntPtr.Zero;
             Guard("create view", () => {
                 if (root == null) {
-                    root = new EmbeddableControlRoot();
+                    root = CreateRoot();
                     // As the detached piano roll window does, give the piano roll the keyboard.
                     root.GotFocus += (_, e) => {
                         if (e.Source == root && ready) {
@@ -212,18 +222,51 @@ namespace OpenUtau.App.Embedding {
                         }
                     };
                 }
-                if (root.TryGetPlatformHandle() is not IMacOSTopLevelPlatformHandle handle) {
-                    throw new InvalidOperationException("No NSView for the embedded top level");
-                }
                 root.Content = ready ? pianoRoll : status;
                 root.Prepare();
                 root.StartRendering();
                 if (ready) {
                     pianoRoll?.Focus();
                 }
-                view = handle.GetNSViewRetained();
+                view = plug != null
+                    ? plug.Handle
+                    : ((IMacOSTopLevelPlatformHandle)root.TryGetPlatformHandle()!).GetNSViewRetained();
             });
             return view;
+        }
+
+        static EmbeddableControlRoot CreateRoot() {
+            if (!OperatingSystem.IsLinux()) {
+                var embedded = new EmbeddableControlRoot();
+                if (embedded.TryGetPlatformHandle() is not IMacOSTopLevelPlatformHandle) {
+                    throw new InvalidOperationException("No NSView for the embedded top level");
+                }
+                return embedded;
+            }
+            plug = XEmbedPlug.Create();
+            // The plug keeps its top level to itself, and content set on it joins that top level straight away.
+            plug.Content = status;
+            return TopLevel.GetTopLevel(status) as EmbeddableControlRoot
+                ?? throw new InvalidOperationException("No top level for the XEmbed client");
+        }
+
+        /// <summary>Runs what OpenUtau has waiting on Linux, where OpenUtau's X11 events and jobs wait for the
+        /// application's run loop: the X11 events that have arrived, then the jobs and timers due. The application
+        /// calls it on the main thread every few milliseconds, as from a timer. It returns once nothing above
+        /// background work waits, or after 50 ms of a stream of input. On macOS the application's run loop runs
+        /// OpenUtau's, so the application never needs to call it.</summary>
+        [UnmanagedCallersOnly]
+        public static int Pump() => Guard("pump", RunPending);
+
+        /// <summary>The managed part of <see cref="Pump"/>.</summary>
+        public static void RunPending() {
+            var frame = new DispatcherFrame();
+            // Background jobs wait for the X11 events that have arrived, so this runs once those and the jobs above
+            // it have.
+            Dispatcher.UIThread.Post(() => frame.Continue = false, DispatcherPriority.Background);
+            using var deadline = DispatcherTimer.RunOnce(() => frame.Continue = false,
+                TimeSpan.FromMilliseconds(50), DispatcherPriority.Send);
+            Dispatcher.UIThread.PushFrame(frame);
         }
 
         /// <summary>Opens a USTX project in place of the current one.</summary>
