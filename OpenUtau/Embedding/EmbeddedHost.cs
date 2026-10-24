@@ -240,6 +240,35 @@ namespace OpenUtau.App.Embedding {
             }
         });
 
+        /// <summary>Reads a project in another format, such as an SVP, through OpenUtau's own importer, and saves it
+        /// as a new USTX without opening it, so the open project stays as it was.</summary>
+        [UnmanagedCallersOnly]
+        public static int ImportProject(IntPtr source, IntPtr destination) => Guard("import project", () =>
+            Import(Utf8(source) ?? throw new ArgumentNullException(nameof(source)),
+                Utf8(destination) ?? throw new ArgumentNullException(nameof(destination))));
+
+        /// <summary>The managed part of <see cref="ImportProject"/>. It refuses a destination that exists, and the
+        /// USTX appears whole or not at all.</summary>
+        public static void Import(string source, string destination) {
+            if (File.Exists(destination)) {
+                throw new IOException($"\"{destination}\" already exists");
+            }
+            var project = Core.Format.Formats.ReadProject(new[] { source })
+                ?? throw new InvalidDataException($"No project in \"{source}\"");
+            project.ustxVersion = Core.Format.Ustx.kUstxVersion;
+            project.FilePath = destination;
+            project.BeforeSave();
+            var partial = destination + ".importing";
+            try {
+                File.WriteAllText(partial, Yaml.DefaultSerializer.Serialize(project), Encoding.UTF8);
+                File.Move(partial, destination);
+            } finally {
+                project.AfterSave();
+                File.Delete(partial);
+            }
+            Log.Information($"Embedded OpenUtau imported {source} as {destination}");
+        }
+
         /// <summary>Shows a track's first voice part in the piano roll.</summary>
         [UnmanagedCallersOnly]
         public static int OpenTrack(int trackNo) => Guard("open track", () => {
