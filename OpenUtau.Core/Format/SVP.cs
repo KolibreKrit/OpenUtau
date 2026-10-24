@@ -38,6 +38,8 @@ namespace OpenUtau.Core.Format {
 
         private static UProject ConvertToUstx(SVPProject svpProject, string svpFilePath, bool isSv2) {
             var project = new UProject();
+            // A new project starts with an empty track, which the SVP's own tracks replace.
+            project.tracks.Clear();
             Ustx.AddDefaultExpressions(project);
 
             project.RegisterExpression(new UExpressionDescriptor("tension (curve)", Ustx.TENC, -100, 100, 0) { type = UExpressionType.Curve });

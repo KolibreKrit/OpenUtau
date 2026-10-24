@@ -60,15 +60,19 @@ namespace OpenUtau.UiTest {
                 } finally {
                     HeadlessUi.Flush();
                     HeadlessUi.SaveScreenshot(window, name);
-                    window.Close();
-                    // Closing the main window quits the app, so nothing else unsubscribes it. Left subscribed,
-                    // it would show a later test's errors over a closed window, which throws.
-                    DocManager.Inst.RemoveSubscriber(window);
-                    if (window.DataContext is MainWindowViewModel viewModel) {
-                        DocManager.Inst.RemoveSubscriber(viewModel);
-                    }
+                    Close(window);
                 }
             });
+        }
+
+        // Closing the main window quits the app, so nothing else unsubscribes it. Left subscribed, it would show a
+        // later test's errors over a closed window, which throws.
+        internal static void Close(MainWindow window) {
+            window.Close();
+            DocManager.Inst.RemoveSubscriber(window);
+            if (window.DataContext is MainWindowViewModel viewModel) {
+                DocManager.Inst.RemoveSubscriber(viewModel);
+            }
         }
 
         static void AssertHasSize(Control? control) {
