@@ -157,14 +157,24 @@ namespace OpenUtau.App.Embedding {
                 DocManager.Inst.PostOnUIThread = action => Dispatcher.UIThread.Post(action);
                 // The hosting application plays the sound.
                 PlaybackManager.Inst.AudioOutput = new DummyAudioOutput();
-                return new PianoRollViewModel();
             }).ContinueWith(t => {
-                if (t.IsFaulted) {
-                    Log.Error(t.Exception?.Flatten(), "Embedded OpenUtau failed to start.");
-                    status.Text = $"OpenUtau couldn't start. {t.Exception?.InnerException?.Message}";
+                var failure = t.Exception?.InnerException;
+                PianoRollViewModel? viewModel = null;
+                if (failure == null) {
+                    try {
+                        // An Avalonia object belongs to the thread that makes it, and the view model makes some, such
+                        // as ThemeManager's brushes when it first uses ThemeManager, so it is made on the main thread.
+                        viewModel = new PianoRollViewModel();
+                    } catch (Exception e) {
+                        failure = e;
+                    }
+                }
+                if (viewModel == null) {
+                    Log.Error(failure, "Embedded OpenUtau failed to start.");
+                    status.Text = $"OpenUtau couldn't start. {failure?.Message}";
                     return;
                 }
-                pianoRoll = new PianoRoll(t.Result);
+                pianoRoll = new PianoRoll(viewModel);
                 pianoRoll.InitializePianoRollWindowAsync();
                 pianoRoll.ViewModel.PlaybackViewModel = new PlaybackViewModel();
                 DocManager.Inst.AddSubscriber(new RenderWhenPhonemized());
