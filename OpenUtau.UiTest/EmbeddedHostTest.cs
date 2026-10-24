@@ -670,6 +670,8 @@ namespace OpenUtau.UiTest {
             Assert.Equal(new[] { DispatcherPriority.Normal, DispatcherPriority.Input, DispatcherPriority.Background }, ran);
         });
 
+        // The headless dispatcher can't ask whether input waits, so it stops running a stream of Input jobs after
+        // 50 ms, as X11 input arriving would, and Pump's own job still waits behind the stream.
         [Fact]
         public void PumpReturnsDuringAStreamOfInput() => HeadlessUi.Run(() => {
             HeadlessUi.Flush();

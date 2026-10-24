@@ -253,8 +253,9 @@ namespace OpenUtau.App.Embedding {
         /// <summary>Runs what OpenUtau has waiting on Linux, where OpenUtau's X11 events and jobs wait for the
         /// application's run loop: the X11 events that have arrived, then the jobs and timers due. The application
         /// calls it on the main thread every few milliseconds, as from a timer. It returns once nothing above
-        /// background work waits, or after 50 ms of a stream of input. On macOS the application's run loop runs
-        /// OpenUtau's, so the application never needs to call it.</summary>
+        /// background work waits, or after 50 ms while X11 input keeps arriving. Jobs still run while no input waits,
+        /// so a stream of them holds the application's main thread until it ends, as it would hold OpenUtau's own
+        /// loop. On macOS the application's run loop runs OpenUtau's, so the application never needs to call it.</summary>
         [UnmanagedCallersOnly]
         public static int Pump() => Guard("pump", RunPending);
 
