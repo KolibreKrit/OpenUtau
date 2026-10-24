@@ -70,7 +70,7 @@ namespace OpenUtau.UiTest {
                 var errors = HeadlessUi.Errors.Snapshot();
                 Assert.True(errors.Count == 0, "Errors reported:\n" + string.Join("\n", errors));
             } finally {
-                window.Close();
+                MainWindowTest.Close(window);
             }
         });
     }
