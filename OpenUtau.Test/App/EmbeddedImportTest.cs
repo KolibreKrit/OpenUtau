@@ -8,8 +8,8 @@ using Xunit;
 
 namespace OpenUtau.Test.App {
     public class EmbeddedImportTest : IDisposable {
-        // A SynthV 2 project, as SynthV writes it on one line, with two tracks: a group reference moved by a bar and
-        // transposed up a tone, and a second tempo.
+        // A SynthV 2 project on one line, as SynthV writes it, with two tracks and a second tempo. The second track
+        // sings a library group moved by a bar and transposed up a tone.
         const string Svp = "{\"version\":197,\"time\":{\"meter\":[{\"index\":0,\"numerator\":3,\"denominator\":4}]," +
             "\"tempo\":[{\"position\":0,\"bpm\":90.0},{\"position\":2822400000,\"bpm\":120.0}]}," +
             "\"library\":[{\"uuid\":\"verse\",\"name\":\"Verse\",\"notes\":[" +
@@ -70,6 +70,19 @@ namespace OpenUtau.Test.App {
             Assert.ThrowsAny<Exception>(() => EmbeddedHost.Import(source, destination));
 
             Assert.Empty(Directory.GetFiles(folder, "song.ustx*"));
+        }
+
+        [Fact]
+        public void ImportLeavesNoPartialUstxWhenItCantMoveItIntoPlace() {
+            // A folder isn't a file that exists, so the import writes the USTX before the move into its place fails.
+            var source = Write("song.svp", Svp);
+            var destination = Path.Combine(folder, "song.ustx");
+            Directory.CreateDirectory(destination);
+
+            Assert.ThrowsAny<Exception>(() => EmbeddedHost.Import(source, destination));
+
+            Assert.Empty(Directory.GetFiles(folder, "song.ustx*"));
+            Assert.Empty(Directory.GetFileSystemEntries(destination));
         }
     }
 }
