@@ -11,8 +11,10 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Embedding;
+using Avalonia.Controls.Primitives;
 using Avalonia.Media;
 using Avalonia.Platform;
+using Avalonia.Styling;
 using Avalonia.Threading;
 using Avalonia.X11;
 using OpenUtau.App.Controls;
@@ -192,6 +194,15 @@ namespace OpenUtau.App.Embedding {
                 var bar = new TrackBar(ShowTrack);
                 DockPanel.SetDock(bar, Dock.Top);
                 editor = new DockPanel { Children = { bar, pianoRoll } };
+                // A menu or tooltip that is a window of its own opens away from what opened it, as far right and down
+                // as the piano roll is from the corner of the application's window. A tooltip takes the setting from
+                // the control that has it, not from its popup.
+                editor.Styles.Add(new Style(x => x.OfType<Popup>()) {
+                    Setters = { new Setter(Popup.ShouldUseOverlayLayerProperty, true) },
+                });
+                editor.Styles.Add(new Style(x => x.Is<Control>()) {
+                    Setters = { new Setter(ToolTip.ShouldUseOverlayLayerProperty, true) },
+                });
                 ready = true;
                 Log.Information("Embedded OpenUtau ready.");
                 EmbeddedMix.Schedule();
