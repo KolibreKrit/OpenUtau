@@ -304,6 +304,20 @@ namespace OpenUtau.UiTest {
         }
 
         [Fact]
+        public void ShowTrackAtThePartOpenAtItsStartCentresOnALaterTick() {
+            // As when the app first shows a singer of the project it opened, whose part opened at its start.
+            var project = Project(out _, out var second);
+            WithPianoRoll(project, second, pianoRoll => {
+                var notesVm = pianoRoll.ViewModel.NotesViewModel;
+                Assert.Equal(0, notesVm.TickOffset);
+                Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 80 * 480));
+                HeadlessUi.Flush();
+                Assert.Same(second, notesVm.Part);
+                Assert.Equal(80 * 480, notesVm.TickOffset + notesVm.ViewportTicks / 2, 0);
+            });
+        }
+
+        [Fact]
         public void ShowTrackAtOpensThePartUnderTheTick() {
             var project = Project(out var first, out var second);
             var other = project.parts.OfType<UVoicePart>().Single(p => p.trackNo == 1);
@@ -316,10 +330,14 @@ namespace OpenUtau.UiTest {
                 // The part opens centred on the tick.
                 Assert.Equal(80 * 480, notesVm.TickOffset + notesVm.ViewportTicks / 2, 0);
 
-                // A part already open stays where it is scrolled.
+                // A part already open stays where it is scrolled while the tick is in view, and otherwise centres on it,
+                // so the view needn't page across to the play head as the song plays.
                 notesVm.TickOffset = 1000;
-                Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 10));
+                Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 1000 + 480));
                 Assert.Equal(1000, notesVm.TickOffset);
+                Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 120 * 480));
+                HeadlessUi.Flush();
+                Assert.Equal(120 * 480, notesVm.TickOffset + notesVm.ViewportTicks / 2, 0);
 
                 // In a gap the part before it opens, and another track's part is found the same way.
                 Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, first.End + 960));

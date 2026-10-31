@@ -594,14 +594,19 @@ namespace OpenUtau.App.Embedding {
                 return false;
             }
             var notesVm = pianoRoll.ViewModel.NotesViewModel;
-            if (notesVm.Part != part) {
-                int at = Math.Clamp(tick, part.position, part.End);
-                DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, project, at));
+            int at = Math.Clamp(tick, part.position, part.End) - part.position;
+            bool opened = notesVm.Part != part;
+            if (opened) {
+                DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, project, part.position + at));
                 pianoRoll.AttachExpressions();
-                // Loading centres the tick only if the piano roll already has a size.
-                WhenSized(notesVm, part, () => notesVm.TickOffset = Math.Clamp(
-                    at - part.position - notesVm.ViewportTicks / 2, 0, notesVm.HScrollBarMax));
             }
+            // Loading centres the tick only if the piano roll already has a size. A part already open moves only when the
+            // tick is out of view, since playback would otherwise page the view across to it.
+            WhenSized(notesVm, part, () => {
+                if (opened || at < notesVm.TickOffset || at >= notesVm.TickOffset + notesVm.ViewportTicks) {
+                    notesVm.TickOffset = Math.Clamp(at - notesVm.ViewportTicks / 2, 0, notesVm.HScrollBarMax);
+                }
+            });
             return true;
         }
 
