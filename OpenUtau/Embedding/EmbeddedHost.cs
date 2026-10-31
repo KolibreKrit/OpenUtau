@@ -37,6 +37,8 @@ namespace OpenUtau.App.Embedding {
         // On Linux, the XEmbed client window that shows root.
         static XEmbedPlug? plug;
         static PianoRoll? pianoRoll;
+        // The piano roll with the track bar above it.
+        static DockPanel? editor;
         static Window? dialogOwner;
         static bool ready;
         internal static bool Ready => ready;
@@ -187,11 +189,14 @@ namespace OpenUtau.App.Embedding {
                 pianoRoll.InitializePianoRollWindowAsync();
                 pianoRoll.ViewModel.PlaybackViewModel = new PlaybackViewModel();
                 DocManager.Inst.AddSubscriber(new RenderWhenPhonemized());
+                var bar = new TrackBar(ShowTrack);
+                DockPanel.SetDock(bar, Dock.Top);
+                editor = new DockPanel { Children = { bar, pianoRoll } };
                 ready = true;
                 Log.Information("Embedded OpenUtau ready.");
                 EmbeddedMix.Schedule();
                 if (root != null) {
-                    root.Content = pianoRoll;
+                    root.Content = editor;
                     pianoRoll.Focus();
                 }
                 if (pendingProject != null) {
@@ -222,7 +227,7 @@ namespace OpenUtau.App.Embedding {
                         }
                     };
                 }
-                root.Content = ready ? pianoRoll : status;
+                root.Content = ready ? editor : status;
                 root.Prepare();
                 root.StartRendering();
                 if (ready) {
