@@ -2,14 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Windows.Input;
+using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.VisualTree;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using OpenUtau.App.Controls;
 using OpenUtau.App.Embedding;
+using OpenUtau.App.ViewModels;
 using OpenUtau.Core;
 using OpenUtau.Core.Ustx;
 using OpenUtau.Core.Util;
@@ -54,7 +57,8 @@ namespace OpenUtau.UiTest {
             DocManager.Inst.ExecuteCmd(new LoadProjectNotification(project));
             var shown = new List<int>();
             var bar = new TrackBar(shown.Add);
-            var window = new Window { Width = 1200, Height = 100, Content = bar };
+            // At the top, as above the piano roll, with room below for the singer menu.
+            var window = new Window { Width = 1200, Height = 600, Content = new StackPanel { Children = { bar } } };
             var recentSingers = Preferences.Default.RecentSingers.ToList();
             try {
                 window.Show();
@@ -80,6 +84,34 @@ namespace OpenUtau.UiTest {
 
         static Border Tab(TrackBar bar, string text) => bar.GetVisualDescendants().OfType<Border>()
             .Single(border => border.Child is StackPanel panel && panel.Children.Contains(TabButton(bar, text)));
+
+        static Button Arrow(TrackBar bar, string text) => (Button)((StackPanel)Tab(bar, text).Child!).Children[1];
+
+        static void Click(Control target) {
+            var window = (Window)TopLevel.GetTopLevel(target)!;
+            var center = target.TranslatePoint(new Point(target.Bounds.Width / 2, target.Bounds.Height / 2), window)!.Value;
+            window.MouseDown(center, MouseButton.Left);
+            window.MouseUp(center, MouseButton.Left);
+            HeadlessUi.Flush();
+        }
+
+        // Lists the singer among OpenUtau's installed singers while the test runs.
+        static void WithInstalled(USinger singer, Action test) {
+            var manager = SingerManager.Inst;
+            manager.SingerGroups.TryGetValue(singer.SingerType, out var group);
+            manager.Singers[singer.Id] = singer;
+            manager.SingerGroups[singer.SingerType] = (group ?? new List<USinger>()).Append(singer).ToList();
+            try {
+                test();
+            } finally {
+                manager.Singers.Remove(singer.Id);
+                if (group == null) {
+                    manager.SingerGroups.Remove(singer.SingerType);
+                } else {
+                    manager.SingerGroups[singer.SingerType] = group;
+                }
+            }
+        }
 
         [Fact]
         public void EachTrackHasATabNamingItsSinger() {
@@ -119,10 +151,11 @@ namespace OpenUtau.UiTest {
         [Fact]
         public void ASingerChosenFromATabsMenuIsOneStepUndoTakesBack() {
             var project = Project();
-            WithBar(project, (bar, _) => {
-                var soprano = new Singer("Soprano");
-                ((ICommand)bar.Tabs[1].Menu().SelectSingerCommand).Execute(soprano);
-                HeadlessUi.Flush();
+            var soprano = new Singer("Soprano");
+            WithBar(project, (bar, _) => WithInstalled(soprano, () => {
+                Click(Arrow(bar, "Harmony · No singer"));
+                Click(TopLevel.GetTopLevel(bar)!.GetVisualDescendants().OfType<Border>().Single(tile =>
+                    tile.Classes.Contains("singerTile") && (tile.DataContext as SingerTileViewModel)?.Singer == soprano));
                 Assert.Same(soprano, project.tracks[1].Singer);
                 Assert.Equal("Harmony · Soprano", bar.Tabs[1].Text);
 
@@ -131,7 +164,7 @@ namespace OpenUtau.UiTest {
 
                 Assert.False(project.tracks[1].Singer.Found);
                 Assert.Equal("Harmony · No singer", bar.Tabs[1].Text);
-            });
+            }));
         }
 
         [Fact]
