@@ -16,6 +16,12 @@ namespace OpenUtau.Core.Format {
     }
 
     internal static class SVPImporter {
+        // The phonemizer language, such as "EN", of each language a SynthV voice database names.
+        private static readonly Dictionary<string, string> languages = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) {
+            { "english", "EN" }, { "japanese", "JA" }, { "mandarin", "ZH" }, { "cantonese", "ZH-YUE" },
+            { "korean", "KO" }, { "spanish", "ES" },
+        };
+
         public static UProject Load(string svpFilePath, bool isSv2) {
             try {
                 var json = File.ReadAllText(svpFilePath).TrimEnd('\0');
@@ -82,6 +88,7 @@ namespace OpenUtau.Core.Format {
 
             foreach (var svpTrack in svpProject.tracks ?? new List<SVPTrack>()) {
                 string singerName = "";
+                string language = "";
                 bool trackHasContent = false;
                 bool trackHasNotes = false;
 
@@ -135,6 +142,8 @@ namespace OpenUtau.Core.Format {
 
                     if (string.IsNullOrWhiteSpace(singerName) && reference.database != null && !string.IsNullOrWhiteSpace(reference.database.name)) {
                         singerName = reference.database.name;
+                        language = string.IsNullOrEmpty(reference.database.languageOverride)
+                            ? reference.database.language : reference.database.languageOverride;
                     }
 
                     SVPGroup group = null;
@@ -358,7 +367,17 @@ namespace OpenUtau.Core.Format {
 
                 if (trackHasContent) {
                     string fallbackName = trackHasNotes ? "" : "Instrumental";
-                    track.Singer = USinger.CreateMissing(string.IsNullOrWhiteSpace(singerName) ? fallbackName : singerName);
+                    // OpenUtau has none of SynthV's voices, so the track starts with an installed singer of the
+                    // voice's language, if there is one, and the singer's phonemizer. Validation gives it the
+                    // singer's renderer.
+                    var installed = trackHasNotes && languages.TryGetValue(language ?? "", out var phonemizerLanguage)
+                        ? SingerManager.Inst.SingerFor(phonemizerLanguage) : null;
+                    if (installed != null) {
+                        track.Singer = installed;
+                        track.Phonemizer = SingerManager.PhonemizerFor(installed)?.Create() ?? track.Phonemizer;
+                    } else {
+                        track.Singer = USinger.CreateMissing(string.IsNullOrWhiteSpace(singerName) ? fallbackName : singerName);
+                    }
                     project.tracks.Add(track);
                 }
             }
@@ -515,7 +534,11 @@ namespace OpenUtau.Core.Format {
             public List<SVPPitchControl> pitchControls { get; set; }
         }
         private class SVPPitchControl { public long pos { get; set; } public double pitch { get; set; } }
-        private class SVPDatabase { public string name { get; set; } }
+        private class SVPDatabase {
+            public string name { get; set; }
+            public string language { get; set; }
+            public string languageOverride { get; set; }
+        }
         private class SVPParameters {
             public SVPCurve pitchDelta { get; set; }
             public SVPCurve loudness { get; set; }

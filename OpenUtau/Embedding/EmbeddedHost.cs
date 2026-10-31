@@ -46,7 +46,11 @@ namespace OpenUtau.App.Embedding {
         // A scroll waiting for the piano roll to have a size, replaced by the next.
         static IDisposable? pendingScroll;
         static string? pendingServer;
-        static readonly TextBlock status = new() {
+        // Start's search for tools, singers and plugins.
+        static Task loading = Task.CompletedTask;
+        // Made when first shown, so an import before Start, as in tests, doesn't tie Avalonia to its thread.
+        static TextBlock? statusText;
+        static TextBlock status => statusText ??= new() {
             Text = "Starting OpenUtau…",
             HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Center,
             VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
@@ -159,14 +163,15 @@ namespace OpenUtau.App.Embedding {
             AvaloniaSynchronizationContext.InstallIfNeeded();
             var mainThread = Thread.CurrentThread;
             var mainScheduler = TaskScheduler.FromCurrentSynchronizationContext();
-            Task.Run(() => {
+            loading = Task.Run(() => {
                 ToolsManager.Inst.Initialize();
                 SingerManager.Inst.Initialize();
                 DocManager.Inst.Initialize(mainThread, mainScheduler);
                 DocManager.Inst.PostOnUIThread = action => Dispatcher.UIThread.Post(action);
                 // The hosting application plays the sound.
                 PlaybackManager.Inst.AudioOutput = new DummyAudioOutput();
-            }).ContinueWith(t => {
+            });
+            loading.ContinueWith(t => {
                 var failure = t.Exception?.InnerException;
                 PianoRollViewModel? viewModel = null;
                 if (failure == null) {
@@ -307,6 +312,9 @@ namespace OpenUtau.App.Embedding {
             if (File.Exists(destination)) {
                 throw new IOException($"\"{destination}\" already exists");
             }
+            // The importer gives tracks installed singers, which Start may still be searching for when the
+            // application imports. If the search failed, the tracks start without singers.
+            Task.WhenAny(loading).Wait();
             // The phonemizer would answer the importer's requests through the open project.
             var project = DocManager.Inst.ReadWithoutPhonemizing(() => Core.Format.Formats.ReadProject(new[] { source }))
                 ?? throw new InvalidDataException($"No project in \"{source}\"");
