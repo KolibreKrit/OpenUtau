@@ -94,7 +94,7 @@ namespace OpenUtau.UiTest {
             return project;
         }
 
-        static UVoicePart AddPart(UProject project, int trackNo, int position, int count) {
+        internal static UVoicePart AddPart(UProject project, int trackNo, int position, int count) {
             var part = new UVoicePart { trackNo = trackNo, position = position, name = $"part at {position}" };
             for (int i = 0; i < count; ++i) {
                 var note = project.CreateNote(60 + i % 5, i * 480, 480);
@@ -144,7 +144,7 @@ namespace OpenUtau.UiTest {
             HeadlessUi.Flush();
         }
 
-        static void WaitForPhonemes(UProject project) {
+        internal static void WaitForPhonemes(UProject project) {
             var clock = Stopwatch.StartNew();
             while (project.parts.OfType<UVoicePart>().Any(p => !p.PhonemesUpToDate)) {
                 Assert.True(clock.Elapsed < TimeSpan.FromSeconds(20), "Phonemes didn't arrive");
