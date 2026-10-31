@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using OpenUtau.Api;
 using OpenUtau.Classic;
 using OpenUtau.Core.Ustx;
 using OpenUtau.Core.Util;
@@ -66,6 +67,35 @@ namespace OpenUtau.Core {
                 return Singers[name];
             }
             return null;
+        }
+
+        /// <summary>
+        /// The installed singer a new track that sings <paramref name="language"/>, a phonemizer's language such as
+        /// "EN", starts with: the one chosen most recently that sings it, or else the first that does by type and
+        /// then name. A singer sings the language of the phonemizer <see cref="PhonemizerFor"/> gives it. Null if no
+        /// installed singer sings the language.
+        /// </summary>
+        public USinger? SingerFor(string language) {
+            var recent = Preferences.Default.RecentSingers
+                .Select(id => Singers.TryGetValue(id, out var singer) ? singer : null)
+                .OfType<USinger>();
+            var installed = SingerGroups
+                .OrderBy(group => group.Key.ToString(), StringComparer.Ordinal)
+                .SelectMany(group => group.Value);
+            return recent.Concat(installed).FirstOrDefault(singer =>
+                string.Equals(PhonemizerFor(singer)?.language, language, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
+        /// The phonemizer a track takes with <paramref name="singer"/>: the one last chosen for the singer, or else
+        /// the singer's default. Null if neither is installed.
+        /// </summary>
+        public static PhonemizerFactory? PhonemizerFor(USinger singer) {
+            if (Preferences.Default.SingerPhonemizers.TryGetValue(singer.Id ?? string.Empty, out var chosen)
+                && PhonemizerFactory.Get(chosen) is PhonemizerFactory factory) {
+                return factory;
+            }
+            return PhonemizerFactory.Get(singer.DefaultPhonemizer);
         }
 
         public void ScheduleReload(USinger singer) {
