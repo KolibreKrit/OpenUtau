@@ -296,6 +296,8 @@ namespace OpenUtau.UiTest {
             var project = Project(out var first, out var second);
             WithPianoRoll(project, first, beforeShow: pianoRoll => {
                 Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 80 * 480));
+                // Asked again before it has a size, as the part is now open, it still centres.
+                Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 80 * 480));
             }, test: pianoRoll => {
                 var notesVm = pianoRoll.ViewModel.NotesViewModel;
                 Assert.Same(second, notesVm.Part);
