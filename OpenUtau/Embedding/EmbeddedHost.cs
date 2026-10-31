@@ -387,9 +387,9 @@ namespace OpenUtau.App.Embedding {
 
         /// <summary>Shows a track's part under a tick from the project's start, or else the part ending last before
         /// it, or else its first part. Where parts overlap, it is the part OpenUtau's playback would open. A part
-        /// already open stays where it is scrolled; another opens centred on the tick, or as near it as the part
-        /// reaches, once the piano roll has a size. Returns 0 once shown, or queued until OpenUtau is ready, 1 if it
-        /// failed, and 2 if the track has no voice part.</summary>
+        /// already open stays where it is scrolled while the tick is in view, and otherwise centres on it; another
+        /// opens centred on the tick, or as near it as the part reaches, once the piano roll has a size. Returns 0 once
+        /// shown, or queued until OpenUtau is ready, 1 if it failed, and 2 if the track has no voice part.</summary>
         [UnmanagedCallersOnly]
         public static int ShowTrackAt(int trackNo, int tick) {
             int result = 0;
@@ -594,14 +594,21 @@ namespace OpenUtau.App.Embedding {
                 return false;
             }
             var notesVm = pianoRoll.ViewModel.NotesViewModel;
-            if (notesVm.Part != part) {
-                int at = Math.Clamp(tick, part.position, part.End);
-                DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, project, at));
+            int at = Math.Clamp(tick, part.position, part.End) - part.position;
+            bool opened = notesVm.Part != part;
+            // Without a size the view's offset means nothing yet, so the tick centres whatever it shows.
+            bool centre = opened || notesVm.Bounds.Width <= 0 || notesVm.Bounds.Height <= 0;
+            if (opened) {
+                DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, project, part.position + at));
                 pianoRoll.AttachExpressions();
-                // Loading centres the tick only if the piano roll already has a size.
-                WhenSized(notesVm, part, () => notesVm.TickOffset = Math.Clamp(
-                    at - part.position - notesVm.ViewportTicks / 2, 0, notesVm.HScrollBarMax));
             }
+            // Loading centres the tick only if the piano roll already has a size. A part already open moves only when the
+            // tick is out of view, since playback would otherwise page the view across to it.
+            WhenSized(notesVm, part, () => {
+                if (centre || at < notesVm.TickOffset || at >= notesVm.TickOffset + notesVm.ViewportTicks) {
+                    notesVm.TickOffset = Math.Clamp(at - notesVm.ViewportTicks / 2, 0, notesVm.HScrollBarMax);
+                }
+            });
             return true;
         }
 

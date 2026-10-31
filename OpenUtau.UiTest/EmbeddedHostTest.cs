@@ -296,8 +296,24 @@ namespace OpenUtau.UiTest {
             var project = Project(out var first, out var second);
             WithPianoRoll(project, first, beforeShow: pianoRoll => {
                 Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 80 * 480));
+                // Asked again before it has a size, as the part is now open, it still centres.
+                Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 80 * 480));
             }, test: pianoRoll => {
                 var notesVm = pianoRoll.ViewModel.NotesViewModel;
+                Assert.Same(second, notesVm.Part);
+                Assert.Equal(80 * 480, notesVm.TickOffset + notesVm.ViewportTicks / 2, 0);
+            });
+        }
+
+        [Fact]
+        public void ShowTrackAtThePartOpenAtItsStartCentresOnALaterTick() {
+            // As when the app first shows a singer of the project it opened, whose part opened at its start.
+            var project = Project(out _, out var second);
+            WithPianoRoll(project, second, pianoRoll => {
+                var notesVm = pianoRoll.ViewModel.NotesViewModel;
+                Assert.Equal(0, notesVm.TickOffset);
+                Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 80 * 480));
+                HeadlessUi.Flush();
                 Assert.Same(second, notesVm.Part);
                 Assert.Equal(80 * 480, notesVm.TickOffset + notesVm.ViewportTicks / 2, 0);
             });
@@ -316,10 +332,14 @@ namespace OpenUtau.UiTest {
                 // The part opens centred on the tick.
                 Assert.Equal(80 * 480, notesVm.TickOffset + notesVm.ViewportTicks / 2, 0);
 
-                // A part already open stays where it is scrolled.
+                // A part already open stays where it is scrolled while the tick is in view, and otherwise centres on it,
+                // so the view needn't page across to the play head as the song plays.
                 notesVm.TickOffset = 1000;
-                Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 10));
+                Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 1000 + 480));
                 Assert.Equal(1000, notesVm.TickOffset);
+                Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + 120 * 480));
+                HeadlessUi.Flush();
+                Assert.Equal(120 * 480, notesVm.TickOffset + notesVm.ViewportTicks / 2, 0);
 
                 // In a gap the part before it opens, and another track's part is found the same way.
                 Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, first.End + 960));
@@ -328,6 +348,31 @@ namespace OpenUtau.UiTest {
                 Assert.Same(other, notesVm.Part);
                 Assert.False(EmbeddedHost.ShowPartIn(pianoRoll, 5, 0));
                 Assert.Same(other, notesVm.Part);
+            });
+        }
+
+        [Fact]
+        public void ShowTrackAtAnOpenPartMovesOnlyForATickPastTheViewsEdges() {
+            var project = Project(out _, out var second);
+            WithPianoRoll(project, second, pianoRoll => {
+                var notesVm = pianoRoll.ViewModel.NotesViewModel;
+                void Show(int at, double from, bool centres) {
+                    notesVm.TickOffset = from;
+                    Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + at));
+                    HeadlessUi.Flush();
+                    if (centres) {
+                        Assert.Equal(at, notesVm.TickOffset + notesVm.ViewportTicks / 2, 0);
+                    } else {
+                        Assert.Equal(from, notesVm.TickOffset);
+                    }
+                }
+                // The first tick shown is in view, and the one before it isn't.
+                Show(20 * 480, 20 * 480, centres: false);
+                Show(20 * 480 - 1, 20 * 480, centres: true);
+                // The view ends where the next tick starts, which is out of view.
+                double before = 40 * 480 - notesVm.ViewportTicks;
+                Show(40 * 480 - 1, before, centres: false);
+                Show(40 * 480, before, centres: true);
             });
         }
 
