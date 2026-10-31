@@ -352,6 +352,31 @@ namespace OpenUtau.UiTest {
         }
 
         [Fact]
+        public void ShowTrackAtAnOpenPartMovesOnlyForATickPastTheViewsEdges() {
+            var project = Project(out _, out var second);
+            WithPianoRoll(project, second, pianoRoll => {
+                var notesVm = pianoRoll.ViewModel.NotesViewModel;
+                void Show(int at, double from, bool centres) {
+                    notesVm.TickOffset = from;
+                    Assert.True(EmbeddedHost.ShowPartIn(pianoRoll, 0, second.position + at));
+                    HeadlessUi.Flush();
+                    if (centres) {
+                        Assert.Equal(at, notesVm.TickOffset + notesVm.ViewportTicks / 2, 0);
+                    } else {
+                        Assert.Equal(from, notesVm.TickOffset);
+                    }
+                }
+                // The first tick shown is in view, and the one before it isn't.
+                Show(20 * 480, 20 * 480, centres: false);
+                Show(20 * 480 - 1, 20 * 480, centres: true);
+                // The view ends where the next tick starts, which is out of view.
+                double before = 40 * 480 - notesVm.ViewportTicks;
+                Show(40 * 480 - 1, before, centres: false);
+                Show(40 * 480, before, centres: true);
+            });
+        }
+
+        [Fact]
         public void PhonemesArePendingUntilOpenUtauHasThemAndTheAppIsTold() {
             var project = Project(out var first, out _);
             var told = new List<int>();
