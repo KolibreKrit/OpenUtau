@@ -119,7 +119,7 @@ namespace OpenUtau.Core.Util {
                     if (!new[] { "stable", "beta", "alpha" }.Contains(Default.Channel)) Default.Channel = "stable";
                     if (Default.DefaultRenderer == "Classic") Default.DefaultRenderer = Renderers.CLASSIC;
                     if (!Renderers.getRendererOptions().Contains(Default.DefaultRenderer)) Default.DefaultRenderer = string.Empty;
-                    if (!Onnx.getRunnerOptions().Contains(Default.OnnxRunner)) Default.OnnxRunner = string.Empty;
+                    if (!Onnx.KeepsRunnerPreference(Default.OnnxRunner)) Default.OnnxRunner = string.Empty;
                     if (OS.IsWindows()) Default.WinePath = string.Empty;
                     if (Default.Theme != null) {
                         Default.ThemeName = Default.Theme switch {

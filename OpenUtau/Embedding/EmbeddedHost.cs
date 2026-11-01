@@ -19,6 +19,7 @@ using Avalonia.Threading;
 using Avalonia.X11;
 using OpenUtau.App.Controls;
 using OpenUtau.App.ViewModels;
+using OpenUtau.App.Views;
 using OpenUtau.Audio;
 using OpenUtau.Classic;
 using OpenUtau.Core;
@@ -94,6 +95,23 @@ namespace OpenUtau.App.Embedding {
             }
         }
 
+        /// <summary>Offers to remap a track's voice colors when OpenUtau asks, as the standalone OpenUtau's main window
+        /// does: after a project opens, and after a track's singer changes in the track bar. Without it, a DiffSinger
+        /// track that changes to a singer with other subbanks keeps its old color numbers, and sings in other colors.
+        /// The dialogs open over the piano roll, owned by <see cref="DialogOwner"/>, which keeps them over it but blocks
+        /// nothing else, so the application can replace the project while one is open. That closes them, unapplied.</summary>
+        public sealed class RemapVoiceColors : ICmdSubscriber {
+            readonly VoiceColorRemapper remapper = new VoiceColorRemapper(DialogOwner);
+
+            public void OnNext(UCommand cmd, bool isUndo) {
+                if (cmd is LoadProjectNotification) {
+                    remapper.DismissPending();
+                } else if (cmd is VoiceColorRemappingNotification remap) {
+                    remapper.Handle(remap);
+                }
+            }
+        }
+
         /// <summary>Tells the application when what <see cref="ReadPhonemes"/> reports may have changed. Edits
         /// that change what OpenUtau sings, such as tempo or expressions, phonemize again, so they are told when
         /// the phonemes arrive. Vibrato changes nothing reported.</summary>
@@ -146,6 +164,10 @@ namespace OpenUtau.App.Embedding {
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
             PathManager.DataPathOverride = Utf8(dataPath);
             PathManager.CachePathOverride = Utf8(cachePath);
+            // OpenUtau runs in the application's process, so a GPU runner's native abort would end the application, and
+            // the WebGPU plugin's can't be caught. The runner chosen in the preferences, which the standalone OpenUtau
+            // may share, is left as it is. Set before anything reads the preferences, which would register the plugin.
+            Onnx.RunnerOverride = "CPU";
             Program.InitLogging();
             Log.Information($"Embedded OpenUtau. Data path = {PathManager.Inst.DataPath}");
             App.Embedded = true;
@@ -196,6 +218,7 @@ namespace OpenUtau.App.Embedding {
                 pianoRoll.InitializePianoRollWindowAsync();
                 pianoRoll.ViewModel.PlaybackViewModel = new PlaybackViewModel();
                 DocManager.Inst.AddSubscriber(new RenderWhenPhonemized());
+                DocManager.Inst.AddSubscriber(new RemapVoiceColors());
                 var bar = new TrackBar(ShowTrack);
                 DockPanel.SetDock(bar, Dock.Top);
                 editor = new DockPanel { Children = { bar, pianoRoll } };
