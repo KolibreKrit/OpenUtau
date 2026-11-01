@@ -341,7 +341,7 @@ namespace OpenUtau.UiTest {
 
         [Fact]
         public void SingerFlyoutHidesTypeFilterForOneType() {
-            WithMainWindow(nameof(SingerFlyoutHidesTypeFilterForOneType), window => WithSingersOfTypes(
+            WithMainWindow(nameof(SingerFlyoutHidesTypeFilterForOneType), window => WithOnlySingersOfTypes(
                     new[] { USingerType.Classic, USingerType.Classic }, singers => {
                 Click(window, FindButtonWithText(window, "welcome.new"));
                 var header = window.GetVisualDescendants().OfType<TrackHeader>().First();
@@ -357,6 +357,23 @@ namespace OpenUtau.UiTest {
                 AssertHasSize(flyout.FindControl<ScrollViewer>("TileScroller"));
                 AssertRendered(window);
             }));
+        }
+
+        // As WithSingersOfTypes, with the installed singers set aside, so the flyout shows only the given types.
+        static void WithOnlySingersOfTypes(IEnumerable<USingerType> types, Action<List<FakeSinger>> test) {
+            var manager = SingerManager.Inst;
+            var installed = new Dictionary<string, USinger>(manager.Singers);
+            var groups = new Dictionary<USingerType, List<USinger>>(manager.SingerGroups);
+            try {
+                manager.Singers.Clear();
+                manager.SingerGroups.Clear();
+                WithSingersOfTypes(types, test);
+            } finally {
+                manager.Singers.Clear();
+                manager.SingerGroups.Clear();
+                foreach (var (id, singer) in installed) manager.Singers[id] = singer;
+                foreach (var (type, group) in groups) manager.SingerGroups[type] = group;
+            }
         }
 
         // Adds singers of the given types, one per entry, so the flyout has types to filter by.
