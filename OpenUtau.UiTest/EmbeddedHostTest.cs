@@ -7,6 +7,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Avalonia.Controls;
+using Avalonia.Headless;
+using Avalonia.Input;
 using Avalonia.Threading;
 using OpenUtau.App.Controls;
 using OpenUtau.App.Embedding;
@@ -837,6 +839,147 @@ namespace OpenUtau.UiTest {
                 Assert.Empty(owner.OwnedWindows.OfType<App.Views.VoiceColorMappingDialog>());
                 Assert.DoesNotContain(part.curves, c => c.abbr.StartsWith("cl"));
                 Assert.True(DocManager.Inst.ChangesSaved);
+            } finally {
+                DocManager.Inst.RemoveSubscriber(remap);
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
+                HeadlessUi.Flush();
+            }
+        });
+
+        // A loaded project whose first phoneme sings the second of two old colors, "strong", on a track whose singer
+        // now has three others.
+        static UProject ColoredProject(out UTrack track, out UVoicePart part, out UPhoneme phoneme) {
+            // PlaybackManager subscribes to commands before it has finished constructing, so it is made here first,
+            // rather than by the phonemizer's thread while this one loads the project.
+            _ = PlaybackManager.Inst;
+            var project = Core.Format.Ustx.Create();
+            part = AddPart(project, 0, 0, 2);
+            project.AfterLoad();
+            track = project.tracks[0];
+            track.Singer = new TestSinger();
+            project.ValidateFull();
+            DocManager.Inst.ExecuteCmd(new LoadProjectNotification(project));
+            WaitForPhonemes(project);
+            phoneme = part.phonemes.First();
+            phoneme.SetExpression(project, track, Core.Format.Ustx.CLR, 1);
+            track.VoiceColorNames = new[] { "soft", "strong" };
+            track.VoiceColorExp = new UExpressionDescriptor("voice color", Core.Format.Ustx.CLR, false, new[] { "airy", "bright", "dark" });
+            return project;
+        }
+
+        static App.Views.VoiceColorMappingDialog OpenMapping(Window owner) =>
+            Assert.Single(owner.OwnedWindows.OfType<App.Views.VoiceColorMappingDialog>());
+
+        static void Accept(Window dialog) {
+            dialog.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, null);
+            HeadlessUi.Flush();
+        }
+
+        // The track bar stays usable while a remap dialog is open, so the track can change singer again. That asks
+        // anew and closes the first dialog, and a late accept of it, as its OK button would have, maps nothing onto the
+        // new singer.
+        [Fact]
+        public void ASecondSingerChangeSupersedesTheFirstRemap() => HeadlessUi.Run(() => {
+            MainWindowTest.InitCore();
+            var project = ColoredProject(out var track, out _, out var phoneme);
+            var remap = new EmbeddedHost.RemapVoiceColors();
+            DocManager.Inst.AddSubscriber(remap);
+            var owner = EmbeddedHost.DialogOwner();
+            try {
+                DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(track.TrackNo, true));
+                HeadlessUi.Flush();
+                var first = OpenMapping(owner);
+                // Map "strong" onto "dark".
+                Assert.IsType<VoiceColorMappingViewModel>(first.DataContext).ColorMappings[1].SelectedIndex = 2;
+
+                track.Singer = new TestSinger();
+                track.VoiceColorExp = new UExpressionDescriptor("voice color", Core.Format.Ustx.CLR, false, new[] { "warm", "cold" });
+                DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(track.TrackNo, true));
+                HeadlessUi.Flush();
+                Assert.False(first.IsVisible);
+                var second = OpenMapping(owner);
+                Assert.NotSame(first, second);
+
+                first.onFinish?.Invoke();
+                HeadlessUi.Flush();
+                Assert.Equal(1, phoneme.GetExpression(project, track, Core.Format.Ustx.CLR).Item1);
+                second.Close();
+                HeadlessUi.Flush();
+            } finally {
+                DocManager.Inst.RemoveSubscriber(remap);
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
+                HeadlessUi.Flush();
+            }
+        });
+
+        // The piano roll stays usable while the remap of every track waits on a dialog, and an edit there is an undo
+        // group of its own. The mapping accepted afterwards still applies, as an undo step of its own.
+        [Fact]
+        public void AMappingAcceptedAfterAnEditStillApplies() => HeadlessUi.Run(() => {
+            MainWindowTest.InitCore();
+            var project = ColoredProject(out var track, out _, out var phoneme);
+            var remap = new EmbeddedHost.RemapVoiceColors();
+            DocManager.Inst.AddSubscriber(remap);
+            var owner = EmbeddedHost.DialogOwner();
+            try {
+                DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(-1, true));
+                HeadlessUi.Flush();
+                var dialog = OpenMapping(owner);
+                Assert.IsType<VoiceColorMappingViewModel>(dialog.DataContext).ColorMappings[1].SelectedIndex = 2;
+
+                DocManager.Inst.StartUndoGroup("test");
+                DocManager.Inst.ExecuteCmd(new RenameTrackCommand(project, track, "Renamed"));
+                DocManager.Inst.EndUndoGroup();
+
+                Accept(dialog);
+                Assert.Equal(2, phoneme.GetExpression(project, track, Core.Format.Ustx.CLR).Item1);
+                DocManager.Inst.Undo();
+                Assert.Equal(1, phoneme.GetExpression(project, track, Core.Format.Ustx.CLR).Item1);
+                Assert.Equal("Renamed", track.TrackName);
+            } finally {
+                DocManager.Inst.RemoveSubscriber(remap);
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
+                HeadlessUi.Flush();
+            }
+        });
+
+        // Copying an imported vocal mode onto a voice color is an edit like any other: it marks a saved project
+        // edited, so the application's save writes it, and Undo takes it back.
+        [Fact]
+        public void AnAcceptedVocalModeMappingIsAnEdit() => HeadlessUi.Run(() => {
+            MainWindowTest.InitCore();
+            var project = Core.Format.Ustx.Create();
+            var part = AddPart(project, 0, 0, 2);
+            var whisper = new UExpressionDescriptor("Whisper", "whp", 0, 100, 0) { type = UExpressionType.Curve };
+            project.RegisterExpression(whisper);
+            var curve = new UCurve(whisper);
+            curve.xs.AddRange(new[] { 0, 480 });
+            curve.ys.AddRange(new[] { 20, 60 });
+            part.curves.Add(curve);
+            project.AfterLoad();
+            project.Saved = true;
+            DocManager.Inst.ExecuteCmd(new LoadProjectNotification(project));
+            var track = project.tracks[0];
+            track.Singer = new ColoredSinger();
+            var remap = new EmbeddedHost.RemapVoiceColors();
+            DocManager.Inst.AddSubscriber(remap);
+            var owner = EmbeddedHost.DialogOwner();
+            try {
+                Assert.True(DocManager.Inst.ChangesSaved);
+                DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(track.TrackNo, true));
+                HeadlessUi.Flush();
+                var dialog = OpenMapping(owner);
+                // Map "Whisper" onto "breathy", the singer's second color, whose curve is cl02.
+                Assert.IsType<VoiceColorMappingViewModel>(dialog.DataContext).ColorMappings[1].SelectedIndex = 1;
+
+                Accept(dialog);
+                var copy = Assert.Single(part.curves, c => c.abbr == "cl02");
+                Assert.Equal(40, copy.Sample(240));
+                Assert.False(DocManager.Inst.ChangesSaved);
+
+                DocManager.Inst.Undo();
+                Assert.DoesNotContain(part.curves, c => c.abbr == "cl02" && c.xs.Count > 0);
+                Assert.False(project.expressions.ContainsKey("cl02"));
             } finally {
                 DocManager.Inst.RemoveSubscriber(remap);
                 DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
