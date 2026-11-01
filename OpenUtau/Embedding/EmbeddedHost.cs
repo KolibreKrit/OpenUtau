@@ -146,6 +146,10 @@ namespace OpenUtau.App.Embedding {
             Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
             PathManager.DataPathOverride = Utf8(dataPath);
             PathManager.CachePathOverride = Utf8(cachePath);
+            // OpenUtau runs in the application's process, so a GPU runner's native abort would end the application, and
+            // the WebGPU plugin's can't be caught. The runner chosen in the preferences, which the standalone OpenUtau
+            // may share, is left as it is. Set before anything reads the preferences, which would register the plugin.
+            Onnx.RunnerOverride = "CPU";
             Program.InitLogging();
             Log.Information($"Embedded OpenUtau. Data path = {PathManager.Inst.DataPath}");
             App.Embedded = true;
