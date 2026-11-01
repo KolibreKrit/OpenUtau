@@ -782,6 +782,68 @@ namespace OpenUtau.UiTest {
             }
         });
 
+        // A DiffSinger singer with a default subbank and a "breathy" one.
+        sealed class ColoredSinger : USinger {
+            public ColoredSinger() {
+                found = true;
+                loaded = true;
+            }
+            public override string Id => "colored";
+            public override string Name => "colored";
+            public override USingerType SingerType => USingerType.DiffSinger;
+            public override IList<USubbank> Subbanks { get; } = new List<USubbank> {
+                new USubbank(new Classic.Subbank { Color = "" }),
+                new USubbank(new Classic.Subbank { Color = "breathy" }),
+            };
+        }
+
+        // Opening a project checks every track. When the application replaces the project while that check waits on
+        // a dialog, the check stops: it must not go on to ask about the replacement's imported vocal modes with the
+        // old track's singer, and add its color curves to the replacement.
+        [Fact]
+        public void ReplacingTheProjectStopsTheRemapOfEveryTrack() => HeadlessUi.Run(() => {
+            MainWindowTest.InitCore();
+            var project = Core.Format.Ustx.Create();
+            AddPart(project, 0, 0, 2);
+            project.AfterLoad();
+            DocManager.Inst.ExecuteCmd(new LoadProjectNotification(project));
+            var track = project.tracks[0];
+            track.Singer = new ColoredSinger();
+            track.VoiceColorNames = new[] { "soft", "strong" };
+            track.VoiceColorExp = new UExpressionDescriptor("voice color", Core.Format.Ustx.CLR, false, new[] { "", "breathy" });
+            var remap = new EmbeddedHost.RemapVoiceColors();
+            DocManager.Inst.AddSubscriber(remap);
+            var owner = EmbeddedHost.DialogOwner();
+            try {
+                DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(-1, true));
+                HeadlessUi.Flush();
+                Assert.Single(owner.OwnedWindows.OfType<App.Views.VoiceColorMappingDialog>());
+
+                // The replacement has an imported "Whisper" vocal mode on its first track.
+                var replacement = Core.Format.Ustx.Create();
+                var part = AddPart(replacement, 0, 0, 2);
+                var whisper = new UExpressionDescriptor("Whisper", "whp", 0, 100, 0) { type = UExpressionType.Curve };
+                replacement.RegisterExpression(whisper);
+                var curve = new UCurve(whisper);
+                curve.xs.AddRange(new[] { 0, 480 });
+                curve.ys.AddRange(new[] { 0, 50 });
+                part.curves.Add(curve);
+                replacement.AfterLoad();
+                // As a project opened from its file is.
+                replacement.Saved = true;
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(replacement));
+                HeadlessUi.Flush();
+
+                Assert.Empty(owner.OwnedWindows.OfType<App.Views.VoiceColorMappingDialog>());
+                Assert.DoesNotContain(part.curves, c => c.abbr.StartsWith("cl"));
+                Assert.True(DocManager.Inst.ChangesSaved);
+            } finally {
+                DocManager.Inst.RemoveSubscriber(remap);
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
+                HeadlessUi.Flush();
+            }
+        });
+
         [Fact]
         public void PumpRunsTheJobsWaitingWhenItIsCalled() => HeadlessUi.Run(() => {
             HeadlessUi.Flush();
