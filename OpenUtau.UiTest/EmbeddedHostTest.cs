@@ -736,6 +736,52 @@ namespace OpenUtau.UiTest {
             }
         });
 
+        // The application can replace the project while a remap dialog is open, since DialogOwner blocks nothing. The
+        // dialog closes, and accepting it late, as its OK button would have, leaves the new project as it was.
+        [Fact]
+        public void ReplacingTheProjectDismissesAPendingRemap() => HeadlessUi.Run(() => {
+            MainWindowTest.InitCore();
+            var project = Core.Format.Ustx.Create();
+            var part = AddPart(project, 0, 0, 2);
+            project.AfterLoad();
+            var track = project.tracks[0];
+            track.Singer = new TestSinger();
+            project.ValidateFull();
+            DocManager.Inst.ExecuteCmd(new LoadProjectNotification(project));
+            WaitForPhonemes(project);
+            // The first phoneme sings the old second color, "strong".
+            var phoneme = part.phonemes.First();
+            phoneme.SetExpression(project, track, Core.Format.Ustx.CLR, 1);
+            track.VoiceColorNames = new[] { "soft", "strong" };
+            track.VoiceColorExp = new UExpressionDescriptor("voice color", Core.Format.Ustx.CLR, false, new[] { "airy", "bright", "dark" });
+            var remap = new EmbeddedHost.RemapVoiceColors();
+            DocManager.Inst.AddSubscriber(remap);
+            var owner = EmbeddedHost.DialogOwner();
+            try {
+                DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(track.TrackNo, true));
+                HeadlessUi.Flush();
+                var dialog = Assert.Single(owner.OwnedWindows.OfType<App.Views.VoiceColorMappingDialog>());
+                // Map "strong" onto "dark".
+                Assert.IsType<VoiceColorMappingViewModel>(dialog.DataContext).ColorMappings[1].SelectedIndex = 2;
+
+                var replacement = Core.Format.Ustx.Create();
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(replacement));
+                HeadlessUi.Flush();
+                Assert.False(dialog.IsVisible);
+                Assert.Empty(owner.OwnedWindows.OfType<App.Views.VoiceColorMappingDialog>());
+
+                dialog.onFinish?.Invoke();
+                HeadlessUi.Flush();
+                Assert.Same(replacement, DocManager.Inst.Project);
+                Assert.True(DocManager.Inst.ChangesSaved);
+                Assert.Equal(1, phoneme.GetExpression(project, track, Core.Format.Ustx.CLR).Item1);
+            } finally {
+                DocManager.Inst.RemoveSubscriber(remap);
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
+                HeadlessUi.Flush();
+            }
+        });
+
         [Fact]
         public void PumpRunsTheJobsWaitingWhenItIsCalled() => HeadlessUi.Run(() => {
             HeadlessUi.Flush();

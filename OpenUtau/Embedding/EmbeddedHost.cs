@@ -98,12 +98,15 @@ namespace OpenUtau.App.Embedding {
         /// <summary>Offers to remap a track's voice colors when OpenUtau asks, as the standalone OpenUtau's main window
         /// does: after a project opens, and after a track's singer changes in the track bar. Without it, a DiffSinger
         /// track that changes to a singer with other subbanks keeps its old color numbers, and sings in other colors.
-        /// The dialogs open over the piano roll, owned by <see cref="DialogOwner"/>.</summary>
+        /// The dialogs open over the piano roll, owned by <see cref="DialogOwner"/>, which keeps them over it but blocks
+        /// nothing else, so the application can replace the project while one is open. That closes them, unapplied.</summary>
         public sealed class RemapVoiceColors : ICmdSubscriber {
             readonly VoiceColorRemapper remapper = new VoiceColorRemapper(DialogOwner);
 
             public void OnNext(UCommand cmd, bool isUndo) {
-                if (cmd is VoiceColorRemappingNotification remap) {
+                if (cmd is LoadProjectNotification) {
+                    remapper.DismissPending();
+                } else if (cmd is VoiceColorRemappingNotification remap) {
                     remapper.Handle(remap);
                 }
             }
