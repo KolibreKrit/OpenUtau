@@ -122,7 +122,7 @@ namespace OpenUtau.App.ViewModels {
         [Reactive] public partial USingerType? TypeFilter { get; set; }
 
         /// <summary>The filter row is only worth its space when there is more than one type to choose from.</summary>
-        public bool ShowTypeFilter => TypeChips.Count > 1;
+        public bool ShowTypeFilter => availableTypes.Count > 1;
 
         /// <summary>
         /// Tiles the grid shows for the current type filter, ignoring the search text.
