@@ -944,7 +944,7 @@ namespace OpenUtau.UiTest {
         });
 
         // Copying an imported vocal mode onto a voice color is an edit like any other: it marks a saved project
-        // edited, so the application's save writes it, and Undo takes it back.
+        // edited, so the application's save writes it, and Undo takes it back, so that it can be made again.
         [Fact]
         public void AnAcceptedVocalModeMappingIsAnEdit() => HeadlessUi.Run(() => {
             MainWindowTest.InitCore();
@@ -980,6 +980,14 @@ namespace OpenUtau.UiTest {
                 DocManager.Inst.Undo();
                 Assert.DoesNotContain(part.curves, c => c.abbr == "cl02" && c.xs.Count > 0);
                 Assert.False(project.expressions.ContainsKey("cl02"));
+
+                // Undo leaves an empty cl02 curve, which the same mapping fills again.
+                DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(track.TrackNo, true));
+                HeadlessUi.Flush();
+                var again = OpenMapping(owner);
+                Assert.IsType<VoiceColorMappingViewModel>(again.DataContext).ColorMappings[1].SelectedIndex = 1;
+                Accept(again);
+                Assert.Equal(40, Assert.Single(part.curves, c => c.abbr == "cl02").Sample(240));
             } finally {
                 DocManager.Inst.RemoveSubscriber(remap);
                 DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
