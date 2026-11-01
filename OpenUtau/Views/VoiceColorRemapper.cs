@@ -147,7 +147,8 @@ namespace OpenUtau.App.Views {
                     }
                     foreach (var part in parts) {
                         var source = part.curves.FirstOrDefault(c => c.abbr == sourceDescriptor.abbr);
-                        if (source == null || source.xs.Count == 0 || part.curves.Any(c => c.abbr == targetAbbr)) continue;
+                        // A curve already drawn for the color stays; an empty one, as Undo leaves it, takes the copy.
+                        if (source == null || source.xs.Count == 0 || part.curves.Any(c => c.abbr == targetAbbr && !c.IsEmpty)) continue;
                         DocManager.Inst.ExecuteCmd(new PasteCurveCommand(project, part, targetAbbr,
                             source.xs, source.ys.Select(y => Math.Clamp(y <= 1 ? y * 100 : y, 0, 100))));
                     }
