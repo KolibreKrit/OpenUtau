@@ -339,6 +339,26 @@ namespace OpenUtau.UiTest {
             }));
         }
 
+        [Fact]
+        public void SingerFlyoutHidesTypeFilterForOneType() {
+            WithMainWindow(nameof(SingerFlyoutHidesTypeFilterForOneType), window => WithSingersOfTypes(
+                    new[] { USingerType.Classic, USingerType.Classic }, singers => {
+                Click(window, FindButtonWithText(window, "welcome.new"));
+                var header = window.GetVisualDescendants().OfType<TrackHeader>().First();
+                Click(window, header.FindControl<Button>("SingerButton")!);
+
+                var flyout = window.GetVisualDescendants().OfType<SingerFlyout>().SingleOrDefault();
+                AssertHasSize(flyout);
+                var viewModel = Assert.IsType<SingerFlyoutViewModel>(flyout.DataContext);
+                Assert.All(viewModel.Tiles, tile => Assert.Equal(USingerType.Classic, tile.Singer.SingerType));
+                Assert.Contains(singers[0], viewModel.Tiles.Select(tile => tile.Singer));
+                Assert.False(viewModel.ShowTypeFilter);
+                Assert.False(flyout.FindControl<ItemsControl>("TypeChips")!.IsEffectivelyVisible);
+                AssertHasSize(flyout.FindControl<ScrollViewer>("TileScroller"));
+                AssertRendered(window);
+            }));
+        }
+
         // Adds singers of the given types, one per entry, so the flyout has types to filter by.
         static void WithSingersOfTypes(IEnumerable<USingerType> types, Action<List<FakeSinger>> test) {
             var singers = types.Select((type, i) => new FakeSinger($"Fake Singer {type} {i}", type)).ToList();
