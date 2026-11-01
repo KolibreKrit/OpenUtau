@@ -150,7 +150,22 @@ namespace OpenUtau.Core {
             return webGpuReady;
         }
 
+        /// <summary>When set, sessions run on this runner whatever the preference says, and it is the only option.
+        /// A host that runs OpenUtau inside its own process sets it to "CPU": a GPU runner's native failures, such as
+        /// the WebGPU plugin's aborts, can't be caught, and would end the host's process too. Set it before anything
+        /// reads the preferences, so the WebGPU plugin is never registered.</summary>
+        public static string? RunnerOverride { get; set; }
+
+        /// <summary>Whether a saved runner preference stays as it is. While <see cref="RunnerOverride"/> is set it
+        /// always does, so a host that shares OpenUtau's preferences never clears the runner chosen there.</summary>
+        public static bool KeepsRunnerPreference(string runner) {
+            return RunnerOverride != null || getRunnerOptions().Contains(runner);
+        }
+
         public static List<string> getRunnerOptions() {
+            if (RunnerOverride != null) {
+                return new List<string> { RunnerOverride };
+            }
             if (OS.IsWindows()) {
                 return new List<string> {
                 "CPU",
@@ -229,6 +244,9 @@ namespace OpenUtau.Core {
 
         /// <summary>The runner the preference resolves to, always one of <see cref="getRunnerOptions"/>.</summary>
         private static string getRunner() {
+            if (RunnerOverride != null) {
+                return RunnerOverride;
+            }
             List<string> runnerOptions = getRunnerOptions();
             string runner = Preferences.Default.OnnxRunner;
             if (String.IsNullOrEmpty(runner)) {
