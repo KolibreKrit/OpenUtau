@@ -19,6 +19,7 @@ using Avalonia.Threading;
 using Avalonia.X11;
 using OpenUtau.App.Controls;
 using OpenUtau.App.ViewModels;
+using OpenUtau.App.Views;
 using OpenUtau.Audio;
 using OpenUtau.Classic;
 using OpenUtau.Core;
@@ -90,6 +91,20 @@ namespace OpenUtau.App.Embedding {
             public void OnNext(UCommand cmd, bool isUndo) {
                 if (cmd is PhonemizedNotification phonemized) {
                     DocManager.Inst.ExecuteCmd(new PreRenderNotification(phonemized.part));
+                }
+            }
+        }
+
+        /// <summary>Offers to remap a track's voice colors when OpenUtau asks, as the standalone OpenUtau's main window
+        /// does: after a project opens, and after a track's singer changes in the track bar. Without it, a DiffSinger
+        /// track that changes to a singer with other subbanks keeps its old color numbers, and sings in other colors.
+        /// The dialogs open over the piano roll, owned by <see cref="DialogOwner"/>.</summary>
+        public sealed class RemapVoiceColors : ICmdSubscriber {
+            readonly VoiceColorRemapper remapper = new VoiceColorRemapper(DialogOwner);
+
+            public void OnNext(UCommand cmd, bool isUndo) {
+                if (cmd is VoiceColorRemappingNotification remap) {
+                    remapper.Handle(remap);
                 }
             }
         }
@@ -200,6 +215,7 @@ namespace OpenUtau.App.Embedding {
                 pianoRoll.InitializePianoRollWindowAsync();
                 pianoRoll.ViewModel.PlaybackViewModel = new PlaybackViewModel();
                 DocManager.Inst.AddSubscriber(new RenderWhenPhonemized());
+                DocManager.Inst.AddSubscriber(new RemapVoiceColors());
                 var bar = new TrackBar(ShowTrack);
                 DockPanel.SetDock(bar, Dock.Top);
                 editor = new DockPanel { Children = { bar, pianoRoll } };

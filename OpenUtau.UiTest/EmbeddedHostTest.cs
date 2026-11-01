@@ -702,6 +702,40 @@ namespace OpenUtau.UiTest {
             Assert.False(owner.IsVisible);
         });
 
+        // A track whose notes were written for two voice colors, and whose singer now has three others, as after a
+        // singer change in the track bar. The standalone OpenUtau's main window asks how to map them; the embedded
+        // host has no main window, so it asks itself, over the piano roll.
+        [Fact]
+        public void ASingerWithOtherVoiceColorsAsksHowToMapThem() => HeadlessUi.Run(() => {
+            MainWindowTest.InitCore();
+            var project = Core.Format.Ustx.Create();
+            AddPart(project, 0, 0, 2);
+            project.AfterLoad();
+            DocManager.Inst.ExecuteCmd(new LoadProjectNotification(project));
+            var track = project.tracks[0];
+            track.Singer = new TestSinger();
+            track.VoiceColorNames = new[] { "soft", "strong" };
+            track.VoiceColorExp = new UExpressionDescriptor("voice color", Core.Format.Ustx.CLR, false, new[] { "airy", "bright", "dark" });
+            var remap = new EmbeddedHost.RemapVoiceColors();
+            DocManager.Inst.AddSubscriber(remap);
+            var owner = EmbeddedHost.DialogOwner();
+            try {
+                DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(track.TrackNo, true));
+                HeadlessUi.Flush();
+                var dialog = Assert.Single(owner.OwnedWindows.OfType<App.Views.VoiceColorMappingDialog>());
+                var mapping = Assert.IsType<VoiceColorMappingViewModel>(dialog.DataContext);
+                // The first color is the default one.
+                Assert.Equal(new[] { "(Default)", "strong" }, mapping.ColorMappings.Select(m => m.Name));
+                dialog.Close();
+                HeadlessUi.Flush();
+                Assert.False(owner.IsVisible);
+            } finally {
+                DocManager.Inst.RemoveSubscriber(remap);
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
+                HeadlessUi.Flush();
+            }
+        });
+
         [Fact]
         public void PumpRunsTheJobsWaitingWhenItIsCalled() => HeadlessUi.Run(() => {
             HeadlessUi.Flush();
