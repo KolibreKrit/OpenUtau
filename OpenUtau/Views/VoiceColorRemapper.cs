@@ -42,22 +42,23 @@ namespace OpenUtau.App.Views {
         static bool Still(UProject project) => DocManager.Inst.Project == project;
 
         public void Handle(VoiceColorRemappingNotification voicecolorNotif) {
-            if (voicecolorNotif.TrackNo < 0 || DocManager.Inst.Project.tracks.Count <= voicecolorNotif.TrackNo) {
+            var project = DocManager.Inst.Project;
+            if (voicecolorNotif.TrackNo < 0 || project.tracks.Count <= voicecolorNotif.TrackNo) {
                 // Verify whether remapping is required when the voice color lineup changes
                 ValidateTracksVoiceColor();
             } else {
-                UTrack track = DocManager.Inst.Project.tracks[voicecolorNotif.TrackNo];
+                UTrack track = project.tracks[voicecolorNotif.TrackNo];
                 if (!voicecolorNotif.Validate) {
                     // When the user intentionally invokes remapping
                     if (track.VoiceColorExp.options.Length == 0) {
                         MessageBox.Show(owner(), ThemeManager.GetString("dialogs.voicecolorremapping.error"), ThemeManager.GetString("errors.caption"), MessageBox.MessageBoxButtons.Ok);
                     } else {
-                        VoiceColorRemapping(track, track.VoiceColorNames, track.VoiceColorExp.options, true);
+                        VoiceColorRemapping(project, track, track.VoiceColorNames, track.VoiceColorExp.options, true);
                     }
                 } else if (track.ValidateVoiceColor(out var oldColors, out var newColors)) { // Verify whether remapping is required when the singer is changed
-                    VoiceColorRemapping(track, oldColors, newColors);
+                    VoiceColorRemapping(project, track, oldColors, newColors);
                 }
-                _ = RemapImportedVocalModesAsync(track);
+                _ = RemapImportedVocalModesAsync(project, track);
             }
         }
 
@@ -74,9 +75,9 @@ namespace OpenUtau.App.Views {
                         break;
                     }
                     if (track.ValidateVoiceColor(out var oldColors, out var newColors)) {
-                        await VoiceColorRemappingAsync(track, oldColors, newColors);
+                        await VoiceColorRemappingAsync(project, track, oldColors, newColors);
                     }
-                    await RemapImportedVocalModesAsync(track);
+                    await RemapImportedVocalModesAsync(project, track);
                 }
             } finally {
                 // Must close the group even if a remapping dialog or an import threw, otherwise
@@ -92,15 +93,14 @@ namespace OpenUtau.App.Views {
         /// Offers to copy the curves of vocal modes that came in with an imported project onto
         /// DiffSinger voice color curves, so the modes keep working on the current singer.
         /// </summary>
-        async Task RemapImportedVocalModesAsync(UTrack track) {
-            if (track.Singer?.SingerType != USingerType.DiffSinger) return;
+        async Task RemapImportedVocalModesAsync(UProject project, UTrack track) {
+            if (!Still(project) || track.Singer?.SingerType != USingerType.DiffSinger) return;
             track.Singer.EnsureLoaded();
             if (!track.Singer.Loaded) return;
             // A DiffSinger voicebank that declares no subbanks has no voice color to remap onto,
             // so there is nothing to ask the user about.
             var colors = track.Singer.Subbanks.Select(s => s.Color).ToArray();
             if (colors.Length == 0) return;
-            var project = DocManager.Inst.Project;
             var parts = project.parts.Where(p => p.trackNo == track.TrackNo && p is UVoicePart).Cast<UVoicePart>().ToArray();
             var modes = parts.SelectMany(p => p.curves)
                 .Where(c => c.descriptor != null && IsImportedVocalModeCurve(c.abbr))
@@ -119,14 +119,14 @@ namespace OpenUtau.App.Views {
             // mapped to an actual voice color are copied.
             foreach (var mapping in ((VoiceColorMappingViewModel)dialog.DataContext).ColorMappings.Where(m => m.OldIndex > 0 && m.SelectedIndex > 0)) {
                 var sourceName = modes[mapping.OldIndex - 1];
-                var sourceDescriptor = DocManager.Inst.Project.expressions.Values.FirstOrDefault(d => d.name.Equals(sourceName, StringComparison.OrdinalIgnoreCase));
+                var sourceDescriptor = project.expressions.Values.FirstOrDefault(d => d.name.Equals(sourceName, StringComparison.OrdinalIgnoreCase));
                 if (sourceDescriptor == null) continue;
                 // SelectedIndex is the subbank index chosen in the dialog, while DiffSinger exposes
                 // subbank k as curve cl(k+1) (see DiffSingerRenderer.GetExpressions).
                 string targetAbbr = $"cl{mapping.SelectedIndex + 1:D2}";
-                if (!DocManager.Inst.Project.expressions.TryGetValue(targetAbbr, out var targetDescriptor)) {
+                if (!project.expressions.TryGetValue(targetAbbr, out var targetDescriptor)) {
                     targetDescriptor = new UExpressionDescriptor($"voice color {colors[mapping.SelectedIndex]}", targetAbbr, 0, 100, 0) { type = UExpressionType.Curve };
-                    DocManager.Inst.Project.RegisterExpression(targetDescriptor);
+                    project.RegisterExpression(targetDescriptor);
                 }
                 foreach (var part in parts) {
                     var source = part.curves.FirstOrDefault(c => c.abbr == sourceDescriptor.abbr);
@@ -143,8 +143,8 @@ namespace OpenUtau.App.Views {
                 abbr != Ustx.SHFC && abbr != Ustx.CLR && abbr != Ustx.CLRY &&
                 abbr != "opec";
         }
-        async Task VoiceColorRemappingAsync(UTrack track, string[] oldColors, string[] newColors) {
-            var project = DocManager.Inst.Project;
+        async Task VoiceColorRemappingAsync(UProject project, UTrack track, string[] oldColors, string[] newColors) {
+            if (!Still(project)) return;
             var parts = project.parts
                 .Where(part => part.trackNo == track.TrackNo && part is UVoicePart)
                 .Cast<UVoicePart>()
@@ -161,8 +161,7 @@ namespace OpenUtau.App.Views {
                 }
             }
         }
-        void VoiceColorRemapping(UTrack track, string[] oldColors, string[] newColors, bool manually = false) {
-            var project = DocManager.Inst.Project;
+        void VoiceColorRemapping(UProject project, UTrack track, string[] oldColors, string[] newColors, bool manually = false) {
             var parts = project.parts
                 .Where(part => part.trackNo == track.TrackNo && part is UVoicePart)
                 .Cast<UVoicePart>()
