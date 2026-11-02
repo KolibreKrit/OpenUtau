@@ -461,6 +461,12 @@ namespace OpenUtau.UiTest {
                 project.tracks[1].Singer = new TestSinger();
                 using var named = JsonDocument.Parse(EmbeddedMix.Snapshot(project, true).json);
                 Assert.Equal("test", named.RootElement.GetProperty("song").GetProperty("tracks")[1].GetProperty("singer").GetString());
+                // A singer that isn't installed keeps the ID its file named, as loading the file leaves it.
+                project.tracks[1].singer = "missing-singer";
+                project.tracks[1].Singer = USinger.CreateMissing("missing-singer");
+                using var missing = JsonDocument.Parse(EmbeddedMix.Snapshot(project, true).json);
+                Assert.Equal("missing-singer",
+                    missing.RootElement.GetProperty("song").GetProperty("tracks")[1].GetProperty("singer").GetString());
                 Assert.Equal(2, EmbeddedMix.ReadAudio("1", out _));
             });
         }
@@ -757,6 +763,31 @@ namespace OpenUtau.UiTest {
             Assert.Null(EmbeddedHost.Unopened);
             using var next = JsonDocument.Parse(EmbeddedMix.Snapshot(DocManager.Inst.Project, false).json);
             Assert.False(next.RootElement.TryGetProperty("unopened", out _));
+        });
+
+        [Fact]
+        public void AnOpenThatIsntAUstxReplacesOneStillReadingAndRunsTheWaitingView() => WithOpening((folder, opened) => {
+            int shown = 0;
+            EmbeddedHost.Open(Saved(folder, "song.ustx"));
+            Assert.True(EmbeddedHost.ShowWhenUsable(() => {
+                shown++;
+                return true;
+            }));
+            Assert.Equal(0, shown);
+
+            var path = Path.Combine(folder, "notes.txt");
+            File.WriteAllText(path, "not a project");
+            HeadlessUi.Errors.Clear();
+            EmbeddedHost.Open(path);
+            Assert.False(EmbeddedHost.Opening);
+            Assert.Equal(1, shown);
+            Assert.Equal(path, EmbeddedHost.Unopened);
+            Assert.Equal(new[] { "" }, opened.files);
+
+            // The USTX read finishes later and leaves the project as the later open left it.
+            OpenAndWait();
+            Assert.Equal(new[] { "" }, opened.files);
+            Assert.Equal(path, EmbeddedHost.Unopened);
         });
 
         [Fact]

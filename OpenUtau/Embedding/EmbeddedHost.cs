@@ -48,7 +48,7 @@ namespace OpenUtau.App.Embedding {
         // The latest OpenProject still reading its file, which a later open or a close replaces.
         static object? opening;
         public static bool Opening => opening != null;
-        // Ready, and not reading a project to open, so calls about the project are about the one to open.
+        // Ready, with no project still being read, so the open project is the one the application last opened.
         internal static bool Usable => ready && !Opening;
         // The file the last open couldn't read, until the next open or close.
         public static string? Unopened { get; private set; }
@@ -397,11 +397,10 @@ namespace OpenUtau.App.Embedding {
         /// <summary>Shows a track's first voice part in the piano roll.</summary>
         [UnmanagedCallersOnly]
         public static int OpenTrack(int trackNo) => Guard("open track", () => {
-            if (Usable) {
+            ShowWhenUsable(() => {
                 ShowTrack(trackNo);
-            } else {
-                pendingView = () => ShowTrack(trackNo);
-            }
+                return true;
+            });
         });
 
         /// <summary>Shows a track's notes in the piano roll, named by their start ticks from the project's start.
@@ -422,11 +421,7 @@ namespace OpenUtau.App.Embedding {
                 if (count > 0) {
                     Marshal.Copy(ticks, starts, 0, count);
                 }
-                if (Usable) {
-                    result = ShowNotesNow(trackNo, starts, select != 0) ? 0 : 2;
-                } else {
-                    pendingView = () => ShowNotesNow(trackNo, starts, select != 0);
-                }
+                result = ShowWhenUsable(() => ShowNotesNow(trackNo, starts, select != 0)) ? 0 : 2;
             });
             return failed != 0 ? failed : result;
         }
@@ -440,11 +435,7 @@ namespace OpenUtau.App.Embedding {
         public static int ShowTrackAt(int trackNo, int tick) {
             int result = 0;
             int failed = Guard("show track at a tick", () => {
-                if (Usable) {
-                    result = ShowPartAt(trackNo, tick) ? 0 : 2;
-                } else {
-                    pendingView = () => ShowPartAt(trackNo, tick);
-                }
+                result = ShowWhenUsable(() => ShowPartAt(trackNo, tick)) ? 0 : 2;
             });
             return failed != 0 ? failed : result;
         }
@@ -617,39 +608,59 @@ namespace OpenUtau.App.Embedding {
             transport?.Invoke(seek, DocManager.Inst.Project.timeAxis.TickPosToMsPos(tick));
         }
 
-        /// <summary>The managed side of <see cref="OpenProject"/> once OpenUtau is ready.</summary>
+        /// <summary>The managed side of <see cref="OpenProject"/> once OpenUtau is ready. A USTX opens once read on
+        /// another thread, and any other format opens before this returns.</summary>
         public static void Open(string file) {
             pendingProject = null;
             Unopened = null;
-            opening = null;
-            if (Core.Format.Formats.DetectProjectFormat(file) != Core.Format.ProjectFormats.Ustx) {
-                Core.Format.Formats.LoadProject(new[] { file });
-                Opened(file);
-                return;
-            }
             var request = new object();
             opening = request;
-            // A long project takes a second or more to read, which would stop the application's window.
-            Task.Run(() => Core.Format.Ustx.Read(file)).ContinueWith(read => Dispatcher.UIThread.Post(() => {
-                if (opening != request) {
-                    return;
-                }
-                opening = null;
-                try {
-                    DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Install(read.Result, file)));
-                    Opened(file);
-                } catch (Exception e) {
-                    Log.Error(e, $"Embedded OpenUtau couldn't open {file}");
-                    Unopened = file;
-                    DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
-                }
-                RunPendingView();
-            }));
+            bool ustx;
+            try {
+                ustx = Core.Format.Formats.DetectProjectFormat(file) == Core.Format.ProjectFormats.Ustx;
+            } catch (Exception) {
+                // ReadProject then fails the same way, so the file is named unopened.
+                ustx = false;
+            }
+            if (ustx) {
+                // A long project takes a second or more to read, which would stop the application's window.
+                Task.Run(() => Core.Format.Ustx.Read(file)).ContinueWith(read => Dispatcher.UIThread.Post(() =>
+                    Finish(request, file, () => Core.Format.Ustx.Install(read.Result, file))));
+            } else {
+                Finish(request, file, () => Core.Format.Formats.ReadProject(new[] { file })
+                    ?? throw new InvalidDataException($"No project in \"{file}\""));
+            }
         }
 
-        static void Opened(string file) {
-            DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(-1, true));
-            Log.Information($"Embedded OpenUtau opened {file}");
+        /// <summary>Opens the project <paramref name="read"/> gives, or an empty one named unopened if it throws,
+        /// unless a later open or a close replaced <paramref name="request"/>. Then runs the call to show a track or
+        /// notes that waited for it.</summary>
+        static void Finish(object request, string file, Func<UProject> read) {
+            if (opening != request) {
+                return;
+            }
+            opening = null;
+            try {
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(read()));
+                DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(-1, true));
+                Log.Information($"Embedded OpenUtau opened {file}");
+            } catch (Exception e) {
+                Log.Error(e, $"Embedded OpenUtau couldn't open {file}");
+                Unopened = file;
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
+            }
+            RunPendingView();
+        }
+
+        /// <summary>Runs <paramref name="show"/>, a call to show a track or notes, and returns what it returns, if
+        /// OpenUtau is usable. Otherwise it keeps the call in place of any earlier one until OpenUtau is ready and the
+        /// project being opened has opened, and returns true.</summary>
+        public static bool ShowWhenUsable(Func<bool> show) {
+            if (Usable) {
+                return show();
+            }
+            pendingView = () => show();
+            return true;
         }
 
         static void RunPendingView() {

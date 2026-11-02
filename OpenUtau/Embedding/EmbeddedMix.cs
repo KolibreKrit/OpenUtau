@@ -236,7 +236,8 @@ namespace OpenUtau.App.Embedding {
             foreach (var track in project.tracks) {
                 json.WriteStartObject();
                 json.WriteString("name", track.TrackName);
-                json.WriteString("singer", track.Singer?.Id ?? string.Empty);
+                // A singer that isn't installed has no ID, and the track keeps the one its file named.
+                json.WriteString("singer", track.Singer?.Id ?? track.singer ?? string.Empty);
                 json.WriteEndObject();
             }
             json.WriteEndArray();
