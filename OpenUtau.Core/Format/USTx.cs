@@ -146,9 +146,20 @@ namespace OpenUtau.Core.Format {
             }
         }
 
-        public static UProject Load(string filePath) {
+        public static UProject Load(string filePath) => Install(Read(filePath), filePath);
+
+        /// <summary>
+        /// Reads a project file without loading its singers or phonemizers or using the open project, so it can run
+        /// on any thread. It has its own deserializer, as the shared one holds a lock for a whole project.
+        /// <see cref="Install"/> finishes the load on the main thread.
+        /// </summary>
+        public static UProject Read(string filePath) {
             string text = File.ReadAllText(filePath, Encoding.UTF8);
-            UProject project = Yaml.DefaultDeserializer.Deserialize<UProject>(text);
+            return new Yaml().Deserialize<UProject>(text);
+        }
+
+        /// <summary>Finishes loading a project <see cref="Read"/> gave, on the main thread.</summary>
+        public static UProject Install(UProject project, string filePath) {
             AddDefaultExpressions(project);
             project.FilePath = filePath;
             project.Saved = true;

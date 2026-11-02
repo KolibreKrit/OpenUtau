@@ -237,7 +237,6 @@ namespace OpenUtau.Core {
 
     public class PlaybackManager : SingletonBase<PlaybackManager>, ICmdSubscriber {
         private PlaybackManager() {
-            DocManager.Inst.AddSubscriber(this);
             try {
                 Directory.CreateDirectory(PathManager.Inst.CachePath);
                 RenderEngine.ReleaseSourceTemp();
@@ -249,6 +248,8 @@ namespace OpenUtau.Core {
             metronomeEngine = new MetronomeEngine();
             metronomeEngine.SetEnabled(Preferences.Default.Metronome);
             editingMix = new MasterAdapter(toneGenerator);
+            // Last, as another thread can create this while the main thread opens a project.
+            DocManager.Inst.AddSubscriber(this);
         }
 
         public readonly ToneGenerator toneGenerator;
