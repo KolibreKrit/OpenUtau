@@ -45,8 +45,15 @@ namespace OpenUtau.App.Embedding {
         static Window? dialogOwner;
         static bool ready;
         internal static bool Ready => ready;
+        // The latest OpenProject still reading its file, which a later open or a close replaces.
+        static object? opening;
+        public static bool Opening => opening != null;
+        // Ready, with no project still being read, so the open project is the one the application last opened.
+        internal static bool Usable => ready && !Opening;
+        // The file the last open couldn't read, until the next open or close.
+        public static string? Unopened { get; private set; }
         static string? pendingProject;
-        // The last call to show a track or notes before OpenUtau was ready, run once it is.
+        // The last call to show a track or notes before OpenUtau was usable, run once it is.
         static Action? pendingView;
         // A scroll waiting for the piano roll to have a size, replaced by the next.
         static IDisposable? pendingScroll;
@@ -234,16 +241,21 @@ namespace OpenUtau.App.Embedding {
                 ready = true;
                 Log.Information("Embedded OpenUtau ready.");
                 EmbeddedMix.Schedule();
-                if (root != null) {
-                    root.Content = editor;
+                bool shown = root != null;
+                // The piano roll's first layout takes a second or more, so it happens now, while the application
+                // restores the rest of a session, rather than when the application first shows the piano roll.
+                var top = Root();
+                top.Content = editor;
+                top.Prepare();
+                if (shown) {
                     pianoRoll.Focus();
                 }
                 if (pendingProject != null) {
-                    LoadProject(pendingProject);
+                    Open(pendingProject);
                 }
-                var view = pendingView;
-                pendingView = null;
-                view?.Invoke();
+                if (!Opening) {
+                    RunPendingView();
+                }
                 if (pendingServer != null) {
                     ConnectTo(pendingServer);
                 }
@@ -257,26 +269,32 @@ namespace OpenUtau.App.Embedding {
         public static IntPtr CreateView() {
             IntPtr view = IntPtr.Zero;
             Guard("create view", () => {
-                if (root == null) {
-                    root = CreateRoot();
-                    // As the detached piano roll window does, give the piano roll the keyboard.
-                    root.GotFocus += (_, e) => {
-                        if (e.Source == root && ready) {
-                            pianoRoll?.Focus();
-                        }
-                    };
-                }
-                root.Content = ready ? editor : status;
-                root.Prepare();
-                root.StartRendering();
+                var top = Root();
+                top.Content = ready ? editor : status;
+                top.Prepare();
+                top.StartRendering();
                 if (ready) {
                     pianoRoll?.Focus();
                 }
                 view = plug != null
                     ? plug.Handle
-                    : ((IMacOSTopLevelPlatformHandle)root.TryGetPlatformHandle()!).GetNSViewRetained();
+                    : ((IMacOSTopLevelPlatformHandle)top.TryGetPlatformHandle()!).GetNSViewRetained();
             });
             return view;
+        }
+
+        static EmbeddableControlRoot Root() {
+            if (root == null) {
+                var created = CreateRoot();
+                // As the detached piano roll window does, give the piano roll the keyboard.
+                created.GotFocus += (_, e) => {
+                    if (e.Source == created && ready) {
+                        pianoRoll?.Focus();
+                    }
+                };
+                root = created;
+            }
+            return root;
         }
 
         static EmbeddableControlRoot CreateRoot() {
@@ -314,12 +332,15 @@ namespace OpenUtau.App.Embedding {
             Dispatcher.UIThread.PushFrame(frame);
         }
 
-        /// <summary>Opens a USTX project in place of the current one.</summary>
+        /// <summary>Opens a USTX project in place of the current one. It reads the file on another thread, so this
+        /// returns first, and until the project opens, snapshots wait, calls to show a track or notes wait as they do
+        /// before OpenUtau is ready, and the project has no changes to save or phonemes to read. If the file can't be
+        /// read, an empty project opens and the snapshots name the file as <c>unopened</c>.</summary>
         [UnmanagedCallersOnly]
         public static int OpenProject(IntPtr path) => Guard("open project", () => {
             var file = Utf8(path) ?? throw new ArgumentNullException(nameof(path));
             if (ready) {
-                LoadProject(file);
+                Open(file);
             } else {
                 pendingProject = file;
             }
@@ -331,6 +352,8 @@ namespace OpenUtau.App.Embedding {
         public static int CloseProject() => Guard("close project", () => {
             pendingProject = null;
             pendingView = null;
+            opening = null;
+            Unopened = null;
             if (ready) {
                 DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
                 DocManager.Inst.Recovered = false;
@@ -374,11 +397,10 @@ namespace OpenUtau.App.Embedding {
         /// <summary>Shows a track's first voice part in the piano roll.</summary>
         [UnmanagedCallersOnly]
         public static int OpenTrack(int trackNo) => Guard("open track", () => {
-            if (ready) {
+            ShowWhenUsable(() => {
                 ShowTrack(trackNo);
-            } else {
-                pendingView = () => ShowTrack(trackNo);
-            }
+                return true;
+            });
         });
 
         /// <summary>Shows a track's notes in the piano roll, named by their start ticks from the project's start.
@@ -399,11 +421,7 @@ namespace OpenUtau.App.Embedding {
                 if (count > 0) {
                     Marshal.Copy(ticks, starts, 0, count);
                 }
-                if (ready) {
-                    result = ShowNotesNow(trackNo, starts, select != 0) ? 0 : 2;
-                } else {
-                    pendingView = () => ShowNotesNow(trackNo, starts, select != 0);
-                }
+                result = ShowWhenUsable(() => ShowNotesNow(trackNo, starts, select != 0)) ? 0 : 2;
             });
             return failed != 0 ? failed : result;
         }
@@ -417,11 +435,7 @@ namespace OpenUtau.App.Embedding {
         public static int ShowTrackAt(int trackNo, int tick) {
             int result = 0;
             int failed = Guard("show track at a tick", () => {
-                if (ready) {
-                    result = ShowPartAt(trackNo, tick) ? 0 : 2;
-                } else {
-                    pendingView = () => ShowPartAt(trackNo, tick);
-                }
+                result = ShowWhenUsable(() => ShowPartAt(trackNo, tick)) ? 0 : 2;
             });
             return failed != 0 ? failed : result;
         }
@@ -442,11 +456,11 @@ namespace OpenUtau.App.Embedding {
                 throw new InvalidOperationException("Phonemes are read on the main thread");
             }
             var receive = Marshal.GetDelegateForFunctionPointer<TextFunction>(function);
-            if (ready) {
+            if (Usable) {
                 // An edit OpenUtau validates later would leave its part looking up to date until then.
                 DocManager.Inst.FlushValidation();
             }
-            var json = EmbeddedNotes.PhonemesJson(ready ? DocManager.Inst.Project : null);
+            var json = EmbeddedNotes.PhonemesJson(Usable ? DocManager.Inst.Project : null);
             var text = new byte[json.Length + 1];
             json.CopyTo(text, 0);
             var pinned = GCHandle.Alloc(text, GCHandleType.Pinned);
@@ -482,14 +496,20 @@ namespace OpenUtau.App.Embedding {
         /// called on the main thread with UTF-8 JSON, valid only during the call, once OpenUtau is ready and again
         /// after each change, with nothing changed sent twice. The JSON has the project's <c>name</c> and whether it
         /// is <c>saved</c>, its <c>tracks</c> as the DAW Integration's <c>updateTracks</c> gives them, and its
-        /// <c>parts</c> as <c>updatePartLayout</c> does. <c>ustx</c>, the project as OpenUtau saves it, is there after
-        /// a change to the project and left out otherwise. A part renders again after each edit to it. Until it has,
+        /// <c>parts</c> as <c>updatePartLayout</c> does. <c>song</c> is there after a change to the project and left
+        /// out otherwise: its <c>tempos</c> as positions in ticks and bpm, its <c>timeSignatures</c> as bar positions,
+        /// beats per bar and beat units, its <c>tracks</c> with each one's <c>name</c> and <c>singer</c> ID, and its
+        /// voice <c>parts</c>, each with its <c>name</c>, <c>trackNo</c>, <c>position</c> and <c>duration</c> in ticks
+        /// and its <c>notes</c>, each with its <c>position</c> in the part, <c>duration</c>, <c>tone</c> and
+        /// <c>lyric</c>, as the USTX writes them. A part renders again after each edit to it. Until it has,
         /// it is listed with its last audio and <c>outdated</c> true, or left out if it has never rendered, and
         /// <c>rendering</c> counts it. If OpenUtau's render pass failed, <c>failed</c> counts the parts it left in
         /// place of <c>rendering</c> until another pass starts, as an edit, Undo or Redo starts one. The application's
         /// playback doesn't. A part whose audio is current has no <c>outdated</c>, and a part loses it once it has
         /// rendered, even with the same audio as before, so the snapshot still changes. A part with no notes to sing
-        /// is left out. <see cref="ReadPartAudio"/> gives each part's audio by its hash.
+        /// is left out. None is sent while <see cref="OpenProject"/> reads a project, and if it couldn't, the snapshots
+        /// name its file as <c>unopened</c> until the next open or close. <see cref="ReadPartAudio"/> gives each
+        /// part's audio by its hash.
         /// </summary>
         [UnmanagedCallersOnly]
         public static int SetMix(IntPtr function) => Guard("set mix", () => {
@@ -588,11 +608,65 @@ namespace OpenUtau.App.Embedding {
             transport?.Invoke(seek, DocManager.Inst.Project.timeAxis.TickPosToMsPos(tick));
         }
 
-        static void LoadProject(string file) {
+        /// <summary>The managed side of <see cref="OpenProject"/> once OpenUtau is ready. A USTX opens once read on
+        /// another thread, and any other format opens before this returns.</summary>
+        public static void Open(string file) {
             pendingProject = null;
-            Core.Format.Formats.LoadProject(new[] { file });
-            DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(-1, true));
-            Log.Information($"Embedded OpenUtau opened {file}");
+            Unopened = null;
+            var request = new object();
+            opening = request;
+            bool ustx;
+            try {
+                ustx = Core.Format.Formats.DetectProjectFormat(file) == Core.Format.ProjectFormats.Ustx;
+            } catch (Exception) {
+                // ReadProject then fails the same way, so the file is named unopened.
+                ustx = false;
+            }
+            if (ustx) {
+                // A long project takes a second or more to read, which would stop the application's window.
+                Task.Run(() => Core.Format.Ustx.Read(file)).ContinueWith(read => Dispatcher.UIThread.Post(() =>
+                    Finish(request, file, () => Core.Format.Ustx.Install(read.Result, file))));
+            } else {
+                Finish(request, file, () => Core.Format.Formats.ReadProject(new[] { file })
+                    ?? throw new InvalidDataException($"No project in \"{file}\""));
+            }
+        }
+
+        /// <summary>Opens the project <paramref name="read"/> gives, or an empty one named unopened if it throws,
+        /// unless a later open or a close replaced <paramref name="request"/>. Then runs the call to show a track or
+        /// notes that waited for it.</summary>
+        static void Finish(object request, string file, Func<UProject> read) {
+            if (opening != request) {
+                return;
+            }
+            opening = null;
+            try {
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(read()));
+                DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(-1, true));
+                Log.Information($"Embedded OpenUtau opened {file}");
+            } catch (Exception e) {
+                Log.Error(e, $"Embedded OpenUtau couldn't open {file}");
+                Unopened = file;
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
+            }
+            RunPendingView();
+        }
+
+        /// <summary>Runs <paramref name="show"/>, a call to show a track or notes, and returns what it returns, if
+        /// OpenUtau is usable. Otherwise it keeps the call in place of any earlier one until OpenUtau is ready and the
+        /// project being opened has opened, and returns true.</summary>
+        public static bool ShowWhenUsable(Func<bool> show) {
+            if (Usable) {
+                return show();
+            }
+            pendingView = () => show();
+            return true;
+        }
+
+        static void RunPendingView() {
+            var view = pendingView;
+            pendingView = null;
+            view?.Invoke();
         }
 
         static void ShowTrack(int trackNo) {
@@ -704,14 +778,14 @@ namespace OpenUtau.App.Embedding {
         /// or OpenUtau couldn't write it.</summary>
         [UnmanagedCallersOnly]
         public static int SaveProject() => Guard("save", () => {
-            if (ready && !DocManager.Inst.ChangesSaved && !Save()) {
+            if (Usable && !DocManager.Inst.ChangesSaved && !Save()) {
                 throw new IOException($"Couldn't save the project to \"{DocManager.Inst.Project.FilePath}\"");
             }
         });
 
         /// <summary>1 if the project has changes not yet saved to its file, otherwise 0.</summary>
         [UnmanagedCallersOnly]
-        public static int HasChanges() => ready && !DocManager.Inst.ChangesSaved ? 1 : 0;
+        public static int HasChanges() => Usable && !DocManager.Inst.ChangesSaved ? 1 : 0;
 
         /// <summary>Saves the project to its file, as OpenUtau's Save does. False if the project has no file or
         /// OpenUtau couldn't write it, which OpenUtau itself only reports in a message.</summary>

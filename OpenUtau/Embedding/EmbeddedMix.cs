@@ -19,9 +19,9 @@ namespace OpenUtau.App.Embedding {
     /// playing that.
     /// </summary>
     public static class EmbeddedMix {
-        /// <summary>Edits come in bursts, such as a note dragged, and the USTX takes a while to write, so a snapshot
-        /// with a new USTX waits this long after the last one.</summary>
-        static readonly TimeSpan ustxInterval = TimeSpan.FromMilliseconds(100);
+        /// <summary>Edits come in bursts, such as a note dragged, so a snapshot with a new song waits this long after
+        /// the last one.</summary>
+        static readonly TimeSpan songInterval = TimeSpan.FromMilliseconds(100);
         /// <summary>Nothing tells when a phrase build lands, so while a part waits for its render the parts are read
         /// again this often. A part a failed pass left counts too, as a build can still land and make it current or
         /// leave it nothing to sing.</summary>
@@ -33,7 +33,7 @@ namespace OpenUtau.App.Embedding {
         // OpenUtau's last render pass failed, so the parts it left unrendered wait for another pass, which an edit,
         // Undo or Redo starts. The application's playback doesn't, as OpenUtau doesn't play.
         static bool renderFailed;
-        static DateTime ustxSentAt = DateTime.MinValue;
+        static DateTime songSentAt = DateTime.MinValue;
         static string? lastSent;
         // The last audio each part rendered, which the snapshot names, marked outdated, while it renders again.
         static readonly Dictionary<UVoicePart, DawAudio.PartAudio> rendered = new();
@@ -91,11 +91,11 @@ namespace OpenUtau.App.Embedding {
 
         /// <summary>Sends a snapshot soon, once OpenUtau is ready and the current command has finished.</summary>
         public static void Schedule() {
-            if (scheduled || receiver == null || !EmbeddedHost.Ready) {
+            if (scheduled || receiver == null || !EmbeddedHost.Usable) {
                 return;
             }
             scheduled = true;
-            var wait = documentChanged ? ustxSentAt + ustxInterval - DateTime.UtcNow : TimeSpan.Zero;
+            var wait = documentChanged ? songSentAt + songInterval - DateTime.UtcNow : TimeSpan.Zero;
             if (wait > TimeSpan.Zero) {
                 DispatcherTimer.RunOnce(Send, wait, DispatcherPriority.Background);
             } else {
@@ -105,7 +105,8 @@ namespace OpenUtau.App.Embedding {
 
         static void Send() {
             scheduled = false;
-            if (receiver == null) {
+            // The project being opened sends its first snapshot once it has, so none tells of the last one meanwhile.
+            if (receiver == null || !EmbeddedHost.Usable) {
                 return;
             }
             string json;
@@ -120,7 +121,7 @@ namespace OpenUtau.App.Embedding {
             }
             if (documentChanged) {
                 documentChanged = false;
-                ustxSentAt = DateTime.UtcNow;
+                songSentAt = DateTime.UtcNow;
             }
             if (waiting > 0 && !polling) {
                 polling = true;
@@ -138,7 +139,7 @@ namespace OpenUtau.App.Embedding {
 
         /// <summary>The snapshot <see cref="EmbeddedHost.SetMix"/> describes, and how many parts wait for a render:
         /// those it counts as rendering, or as failed if a failed render pass left them.</summary>
-        public static (string json, int waiting) Snapshot(UProject project, bool withUstx) {
+        public static (string json, int waiting) Snapshot(UProject project, bool withSong) {
             var planner = PlaybackManager.Inst.MixPlanner;
             var now = new Dictionary<string, DawAudio.PartAudio>();
             var parts = project.parts.OfType<UVoicePart>().OrderBy(p => p.trackNo).ThenBy(p => p.position).ToList();
@@ -152,8 +153,11 @@ namespace OpenUtau.App.Embedding {
                 bool saved = !string.IsNullOrEmpty(project.FilePath);
                 json.WriteString("name", saved ? Path.GetFileNameWithoutExtension(project.FilePath) : string.Empty);
                 json.WriteBoolean("saved", saved);
-                if (withUstx && Ustx(project) is string ustx) {
-                    json.WriteString("ustx", ustx);
+                if (EmbeddedHost.Unopened is string unopened) {
+                    json.WriteString("unopened", unopened);
+                }
+                if (withSong) {
+                    WriteSong(json, project);
                 }
                 json.WriteStartArray("tracks");
                 foreach (var track in project.tracks) {
@@ -206,21 +210,58 @@ namespace OpenUtau.App.Embedding {
             return (System.Text.Encoding.UTF8.GetString(stream.ToArray()), rendering);
         }
 
-        /// <summary>The project as OpenUtau saves it, or null if it can't be written.</summary>
-        static string? Ustx(UProject project) {
-            var path = project.FilePath;
-            // Saving works out each wave part's path from the project's folder, which a new project doesn't have yet.
-            if (string.IsNullOrEmpty(path)) {
-                project.FilePath = Path.Combine(Path.GetTempPath(), "Untitled.ustx");
+        /// <summary>The <c>song</c> <see cref="EmbeddedHost.SetMix"/> describes. It holds only what the application
+        /// reads, as writing the whole USTX here takes over a second for a long project and would hold up the window
+        /// after each edit.</summary>
+        static void WriteSong(Utf8JsonWriter json, UProject project) {
+            json.WriteStartObject("song");
+            json.WriteStartArray("tempos");
+            foreach (var tempo in project.tempos) {
+                json.WriteStartObject();
+                json.WriteNumber("position", tempo.position);
+                json.WriteNumber("bpm", tempo.bpm);
+                json.WriteEndObject();
             }
-            try {
-                return DawUstx.Serialize(project);
-            } catch (Exception e) {
-                Log.Error(e, "Embedded OpenUtau couldn't write its project for the application");
-                return null;
-            } finally {
-                project.FilePath = path;
+            json.WriteEndArray();
+            json.WriteStartArray("timeSignatures");
+            foreach (var signature in project.timeSignatures) {
+                json.WriteStartObject();
+                json.WriteNumber("barPosition", signature.barPosition);
+                json.WriteNumber("beatPerBar", signature.beatPerBar);
+                json.WriteNumber("beatUnit", signature.beatUnit);
+                json.WriteEndObject();
             }
+            json.WriteEndArray();
+            json.WriteStartArray("tracks");
+            foreach (var track in project.tracks) {
+                json.WriteStartObject();
+                json.WriteString("name", track.TrackName);
+                // A singer that isn't installed has no ID, and the track keeps the one its file named.
+                json.WriteString("singer", track.Singer?.Id ?? track.singer ?? string.Empty);
+                json.WriteEndObject();
+            }
+            json.WriteEndArray();
+            json.WriteStartArray("parts");
+            foreach (var part in project.parts.OfType<UVoicePart>().OrderBy(p => p.trackNo).ThenBy(p => p.position)) {
+                json.WriteStartObject();
+                json.WriteString("name", part.name);
+                json.WriteNumber("trackNo", part.trackNo);
+                json.WriteNumber("position", part.position);
+                json.WriteNumber("duration", part.Duration);
+                json.WriteStartArray("notes");
+                foreach (var note in part.notes) {
+                    json.WriteStartObject();
+                    json.WriteNumber("position", note.position);
+                    json.WriteNumber("duration", note.duration);
+                    json.WriteNumber("tone", note.tone);
+                    json.WriteString("lyric", note.lyric);
+                    json.WriteEndObject();
+                }
+                json.WriteEndArray();
+                json.WriteEndObject();
+            }
+            json.WriteEndArray();
+            json.WriteEndObject();
         }
 
         /// <summary>The audio of the part the last snapshot names by the hash: 0 with its samples, or 2 if no part in

@@ -415,8 +415,8 @@ namespace OpenUtau.UiTest {
         }
 
         [Fact]
-        public void TheMixSnapshotHasTheTracksTheUstxAndThePartsStillRendering() {
-            var project = Project(out var first, out _);
+        public void TheMixSnapshotHasTheTracksTheSongAndThePartsStillRendering() {
+            var project = Project(out var first, out var second);
             WithPianoRoll(project, first, pianoRoll => {
                 DocManager.Inst.StartUndoGroup("test");
                 DocManager.Inst.ExecuteCmd(new ChangeNoteLyricCommand(first, first.notes.ElementAt(0), "la"));
@@ -433,13 +433,40 @@ namespace OpenUtau.UiTest {
                 Assert.InRange(rendering, 1, 3);
                 Assert.Equal(rendering, root.GetProperty("rendering").GetInt32());
                 Assert.Equal(3 - rendering, root.GetProperty("parts").GetArrayLength());
-                // The project has never been saved, and its USTX is written all the same.
                 Assert.False(root.GetProperty("saved").GetBoolean());
-                Assert.Contains("lyric: la", root.GetProperty("ustx").GetString());
-                Assert.Equal(string.Empty, project.FilePath);
+                var song = root.GetProperty("song");
+                Assert.Equal(0, song.GetProperty("tempos")[0].GetProperty("position").GetInt32());
+                Assert.Equal(120, song.GetProperty("tempos")[0].GetProperty("bpm").GetDouble());
+                Assert.Equal(4, song.GetProperty("timeSignatures")[0].GetProperty("beatPerBar").GetInt32());
+                Assert.Equal(project.tracks[1].TrackName, song.GetProperty("tracks")[1].GetProperty("name").GetString());
+                // Voice parts in track order, then by position: the edited one, the long one, then track 2's.
+                var parts = song.GetProperty("parts");
+                Assert.Equal(new[] { 0, 19200, 1920 }, parts.EnumerateArray().Select(p => p.GetProperty("position").GetInt32()));
+                Assert.Equal(1, parts[2].GetProperty("trackNo").GetInt32());
+                Assert.Equal("part at 19200", parts[1].GetProperty("name").GetString());
+                // OpenUtau lengthens a part to the beat after its last note.
+                Assert.Equal(second.Duration, parts[1].GetProperty("duration").GetInt32());
+                Assert.True(second.Duration > 160 * 480);
+                var notes = parts[0].GetProperty("notes");
+                Assert.Equal(4, notes.GetArrayLength());
+                Assert.Equal("la", notes[0].GetProperty("lyric").GetString());
+                Assert.Equal("a", notes[1].GetProperty("lyric").GetString());
+                Assert.Equal(480, notes[1].GetProperty("position").GetInt32());
+                Assert.Equal(480, notes[1].GetProperty("duration").GetInt32());
+                Assert.Equal(61, notes[1].GetProperty("tone").GetInt32());
 
                 using var unchanged = JsonDocument.Parse(EmbeddedMix.Snapshot(project, false).json);
-                Assert.False(unchanged.RootElement.TryGetProperty("ustx", out _));
+                Assert.False(unchanged.RootElement.TryGetProperty("song", out _));
+                // The song names a singer by its ID, as the USTX does.
+                project.tracks[1].Singer = new TestSinger();
+                using var named = JsonDocument.Parse(EmbeddedMix.Snapshot(project, true).json);
+                Assert.Equal("test", named.RootElement.GetProperty("song").GetProperty("tracks")[1].GetProperty("singer").GetString());
+                // A singer that isn't installed keeps the ID its file named, as loading the file leaves it.
+                project.tracks[1].singer = "missing-singer";
+                project.tracks[1].Singer = USinger.CreateMissing("missing-singer");
+                using var missing = JsonDocument.Parse(EmbeddedMix.Snapshot(project, true).json);
+                Assert.Equal("missing-singer",
+                    missing.RootElement.GetProperty("song").GetProperty("tracks")[1].GetProperty("singer").GetString());
                 Assert.Equal(2, EmbeddedMix.ReadAudio("1", out _));
             });
         }
@@ -636,6 +663,132 @@ namespace OpenUtau.UiTest {
                 }
             });
         }
+
+        // The projects OpenUtau opens, by file.
+        sealed class Opened : ICmdSubscriber {
+            public readonly List<string> files = new();
+            public void OnNext(UCommand cmd, bool isUndo) {
+                if (cmd is LoadProjectNotification load) {
+                    files.Add(load.project.FilePath ?? "");
+                }
+            }
+        }
+
+        // Opens projects as OpenProject does once OpenUtau is ready, then waits for the last open and a little after.
+        static void OpenAndWait(params string[] files) {
+            foreach (var file in files) {
+                EmbeddedHost.Open(file);
+            }
+            var clock = Stopwatch.StartNew();
+            while (EmbeddedHost.Opening) {
+                Assert.True(clock.Elapsed < TimeSpan.FromSeconds(20), "The project didn't open");
+                Thread.Sleep(10);
+                HeadlessUi.Flush();
+            }
+            // An open the last one replaced would install itself about now.
+            for (int i = 0; i < 20; ++i) {
+                Thread.Sleep(10);
+                HeadlessUi.Flush();
+            }
+        }
+
+        static void WithOpening(Action<string, Opened> test) => HeadlessUi.Run(() => {
+            MainWindowTest.InitCore();
+            DocManager.Inst.RequestFrame = null;
+            var folder = Path.Combine(Path.GetTempPath(), "OpenUtauEmbeddedOpenTest", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            var opened = new Opened();
+            DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
+            DocManager.Inst.AddSubscriber(opened);
+            try {
+                test(folder, opened);
+            } finally {
+                DocManager.Inst.RemoveSubscriber(opened);
+                HeadlessUi.Errors.Clear();
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(Core.Format.Ustx.Create()));
+                HeadlessUi.Flush();
+                Directory.Delete(folder, recursive: true);
+            }
+        });
+
+        static string Saved(string folder, string name) {
+            var path = Path.Combine(folder, name);
+            var project = Project(out _, out _);
+            project.name = name;
+            Assert.True(Core.Format.Ustx.Save(path, project));
+            return path;
+        }
+
+        [Fact]
+        public void AProjectOpensAfterTheCallWithTheOldOneOpenUntilThen() => WithOpening((folder, opened) => {
+            var path = Saved(folder, "song.ustx");
+            var before = DocManager.Inst.Project;
+
+            EmbeddedHost.Open(path);
+            Assert.True(EmbeddedHost.Opening);
+            Assert.Same(before, DocManager.Inst.Project);
+            Assert.Empty(opened.files);
+
+            OpenAndWait();
+            Assert.Equal(new[] { path }, opened.files);
+            Assert.Equal(path, DocManager.Inst.Project.FilePath);
+            Assert.Equal(3, DocManager.Inst.Project.parts.Count);
+            Assert.Null(EmbeddedHost.Unopened);
+        });
+
+        [Fact]
+        public void OnlyTheLastOfTwoOpensOpens() => WithOpening((folder, opened) => {
+            var first = Saved(folder, "first.ustx");
+            var second = Saved(folder, "second.ustx");
+
+            OpenAndWait(first, second);
+            Assert.Equal(new[] { second }, opened.files);
+        });
+
+        [Fact]
+        public void AProjectThatCantBeReadLeavesAnEmptyOneNamedUnopened() => WithOpening((folder, opened) => {
+            var path = Path.Combine(folder, "broken.ustx");
+            File.WriteAllText(path, "ustx_version: 0.10\ntracks: [{track_name: \"unclosed\"\n");
+            HeadlessUi.Errors.Clear();
+
+            OpenAndWait(path);
+            Assert.Equal(path, EmbeddedHost.Unopened);
+            Assert.Equal(new[] { "" }, opened.files);
+            Assert.Empty(DocManager.Inst.Project.parts);
+            Assert.Contains(HeadlessUi.Errors.Snapshot(), error => error.Contains(path));
+            using var snapshot = JsonDocument.Parse(EmbeddedMix.Snapshot(DocManager.Inst.Project, false).json);
+            Assert.Equal(path, snapshot.RootElement.GetProperty("unopened").GetString());
+
+            OpenAndWait(Saved(folder, "song.ustx"));
+            Assert.Null(EmbeddedHost.Unopened);
+            using var next = JsonDocument.Parse(EmbeddedMix.Snapshot(DocManager.Inst.Project, false).json);
+            Assert.False(next.RootElement.TryGetProperty("unopened", out _));
+        });
+
+        [Fact]
+        public void AnOpenThatIsntAUstxReplacesOneStillReadingAndRunsTheWaitingView() => WithOpening((folder, opened) => {
+            int shown = 0;
+            EmbeddedHost.Open(Saved(folder, "song.ustx"));
+            Assert.True(EmbeddedHost.ShowWhenUsable(() => {
+                shown++;
+                return true;
+            }));
+            Assert.Equal(0, shown);
+
+            var path = Path.Combine(folder, "notes.txt");
+            File.WriteAllText(path, "not a project");
+            HeadlessUi.Errors.Clear();
+            EmbeddedHost.Open(path);
+            Assert.False(EmbeddedHost.Opening);
+            Assert.Equal(1, shown);
+            Assert.Equal(path, EmbeddedHost.Unopened);
+            Assert.Equal(new[] { "" }, opened.files);
+
+            // The USTX read finishes later and leaves the project as the later open left it.
+            OpenAndWait();
+            Assert.Equal(new[] { "" }, opened.files);
+            Assert.Equal(path, EmbeddedHost.Unopened);
+        });
 
         [Fact]
         public void SaveIsFalseWhenOpenUtauCouldntWriteTheFile() => HeadlessUi.Run(() => {
