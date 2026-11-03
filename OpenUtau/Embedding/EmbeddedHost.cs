@@ -162,6 +162,10 @@ namespace OpenUtau.App.Embedding {
                 action();
                 return 0;
             } catch (Exception e) {
+                if (showcase != null) {
+                    try { RestoreShowcase(); }
+                    catch (Exception restore) { Log.Error(restore, "Embedded OpenUtau: Stage restoration failed"); }
+                }
                 Log.Error(e, $"Embedded OpenUtau: {what} failed");
                 Console.Error.WriteLine($"Embedded OpenUtau: {what} failed: {e}");
                 return 1;
@@ -356,6 +360,7 @@ namespace OpenUtau.App.Embedding {
         /// nothing of the last project shows or plays.</summary>
         [UnmanagedCallersOnly]
         public static int CloseProject() => Guard("close project", () => {
+            RestoreShowcase();
             pendingProject = null;
             pendingView = null;
             opening = null;
@@ -833,9 +838,9 @@ namespace OpenUtau.App.Embedding {
         [UnmanagedCallersOnly]
         public static int BeginShowcase(int hideChrome) => Guard("begin showcase", () => {
             if (!ready || pianoRoll == null || showcase != null) throw new InvalidOperationException("Piano roll isn't ready");
+            trackBarVisible = trackBar?.IsVisible ?? false;
             showcase = new EmbeddedShowcase(pianoRoll);
             showcase.Begin(hideChrome != 0);
-            trackBarVisible = trackBar?.IsVisible ?? false;
             if (hideChrome != 0 && trackBar != null) trackBar.IsVisible = false;
         });
 
@@ -847,9 +852,9 @@ namespace OpenUtau.App.Embedding {
 
         /// <summary>Steers the roll and returns its canvas in the embedded editor's points as UTF-8 JSON.</summary>
         [UnmanagedCallersOnly]
-        public static int ReadShowcase(IntPtr function, IntPtr context) => Guard("read showcase", () => {
+        public static int ReadShowcase(double seconds, IntPtr function, IntPtr context) => Guard("read showcase", () => {
             if (showcase == null || editor == null) throw new InvalidOperationException("Stage hasn't begun");
-            showcase.Update(showcasePlan, DocManager.Inst.Project.timeAxis.TickPosToMsPos(DocManager.Inst.playPosTick) / 1000);
+            showcase.Update(showcasePlan, seconds);
             var text = Encoding.UTF8.GetBytes(showcase.Snapshot(editor));
             var pinned = GCHandle.Alloc(text, GCHandleType.Pinned);
             try {
@@ -859,13 +864,16 @@ namespace OpenUtau.App.Embedding {
 
         /// <summary>Restores the editor captured before Preview or Record, including its shown part and chrome.</summary>
         [UnmanagedCallersOnly]
-        public static int EndShowcase() => Guard("end showcase", () => {
-            if (showcase == null) return;
-            showcase.End();
+        public static int EndShowcase() => Guard("end showcase", RestoreShowcase);
+
+        static void RestoreShowcase() {
+            var ending = showcase;
             showcase = null;
             showcasePlan = "";
-            if (trackBar != null) trackBar.IsVisible = trackBarVisible;
-        });
+            if (ending == null) return;
+            try { ending.End(); }
+            finally { if (trackBar != null) trackBar.IsVisible = trackBarVisible; }
+        }
 
         /// <summary>Moves OpenUtau's playhead to the application's play head, in milliseconds from the project's start,
         /// as the DAW Integration's <c>playhead</c> does. Main thread.</summary>
@@ -997,7 +1005,7 @@ namespace OpenUtau.App.Embedding {
         static bool ShowNotesNow(int trackNo, int[] ticks, bool select) => pianoRoll != null && ShowNotesIn(pianoRoll, trackNo, ticks, select);
 
         /// <summary>The piano roll part of <see cref="ShowTrackAt"/>. False if the track has no voice part.</summary>
-        public static bool ShowPartIn(PianoRoll pianoRoll, int trackNo, int tick) {
+        public static bool ShowPartIn(PianoRoll pianoRoll, int trackNo, int tick, bool frameView = true) {
             var project = DocManager.Inst.Project;
             var part = EmbeddedNotes.PartAt(project, trackNo, tick);
             if (part == null) {
@@ -1014,7 +1022,7 @@ namespace OpenUtau.App.Embedding {
             }
             // Loading centres the tick only if the piano roll already has a size. A part already open moves only when the
             // tick is out of view, since playback would otherwise page the view across to it.
-            WhenSized(notesVm, part, () => {
+            if (frameView) WhenSized(notesVm, part, () => {
                 if (centre || at < notesVm.TickOffset || at >= notesVm.TickOffset + notesVm.ViewportTicks) {
                     notesVm.TickOffset = Math.Clamp(at - notesVm.ViewportTicks / 2, 0, notesVm.HScrollBarMax);
                 }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Globalization;
 using System.Text.Json;
+using System.ComponentModel;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.VisualTree;
@@ -16,8 +17,12 @@ namespace OpenUtau.App.Embedding {
         readonly PianoRoll roll;
         UVoicePart? part;
         double tickWidth, tickOffset, trackHeight, trackOffset;
-        bool active, showTips, showPhoneme, showWaveform, playheadWasVisible;
-        Control? playheadLine;
+        bool active, showTips, showPhoneme, showWaveform, playheadWasVisible, highlightWasVisible, updating;
+        Control? playheadLine, playheadHighlight;
+        double hostSeconds;
+        bool held;
+        string scrolling = "";
+        long externalViewWrites;
         string theme = "Light";
         readonly List<Action> restoreChrome = new();
 
@@ -37,9 +42,14 @@ namespace OpenUtau.App.Embedding {
             Preferences.Default.ThemeName = "Dark";
             App.SetTheme();
             active = true;
+            vm.SetHostPlayPos(DocManager.Inst.playPosTick);
             playheadLine = roll.FindControl<Control>("PlayPosLine");
             playheadWasVisible = playheadLine?.IsVisible ?? false;
             playheadLine?.SetCurrentValue(Control.IsVisibleProperty, true);
+            playheadHighlight = roll.FindControl<Control>("PlayPosHighlight");
+            highlightWasVisible = playheadHighlight?.IsVisible ?? false;
+            playheadHighlight?.SetCurrentValue(Control.IsVisibleProperty, false);
+            vm.PropertyChanged += ViewChanged;
             frame = null;
             showPhoneme = vm.ShowPhoneme;
             showWaveform = vm.ShowWaveform;
@@ -67,6 +77,10 @@ namespace OpenUtau.App.Embedding {
                     column.Width = new GridLength(0);
                 }
             }
+        }
+
+        void ViewChanged(object? sender, PropertyChangedEventArgs e) {
+            if (!updating && (e.PropertyName == "TickOffset" || e.PropertyName == "TickWidth")) ++externalViewWrites;
         }
 
         record Phrase(double On, double Off);
@@ -116,11 +130,20 @@ namespace OpenUtau.App.Embedding {
 
         public void Update(string plan, double seconds) {
             if (!active) return;
+            updating = true;
+            try { UpdateFrame(plan, seconds); }
+            finally { updating = false; }
+        }
+
+        void UpdateFrame(string plan, double seconds) {
             var f = Fields(plan);
             string Get(string key, string fallback = "") => f.GetValueOrDefault(key, fallback);
             double N(string key, double fallback) => Get(key) is var v && v.Length > 0 ? Number(v) : fallback;
             if (Get("steer") != "1") return;
             seconds = N("hold", seconds);
+            held = Get("hold").Length > 0;
+            scrolling = Get("scroll");
+            hostSeconds = seconds;
             int track = 1;
             foreach (var entry in Get("switches").Split(',', StringSplitOptions.RemoveEmptyEntries)) {
                 var pair = entry.Split(':');
@@ -130,7 +153,7 @@ namespace OpenUtau.App.Embedding {
             var project = DocManager.Inst.Project;
             var axis = project.timeAxis;
             int tick = axis.MsPosToTickPos(seconds * 1000);
-            EmbeddedHost.ShowPartIn(roll, track - 1, tick);
+            EmbeddedHost.ShowPartIn(roll, track - 1, tick, false);
             var vm = roll.ViewModel.NotesViewModel;
             if (vm.Part == null || vm.Bounds.Width <= 0) return;
             playheadLine?.SetCurrentValue(Control.IsVisibleProperty, true);
@@ -175,6 +198,8 @@ namespace OpenUtau.App.Embedding {
             vm.TickOffset = l - vm.Part.position;
             if (Get("pitch") == "1" && centre.HasValue)
                 vm.TrackOffset = vm.TrackCount - 0.5 - centre.Value - N("middle", 0.5) * vm.ViewportTracks;
+            vm.SetHostPlayPos(axis.MsPosToNonExactTickPos(seconds * 1000));
+            playheadHighlight?.SetCurrentValue(Control.IsVisibleProperty, false);
         }
 
         public string Snapshot(Control origin) {
@@ -191,7 +216,14 @@ namespace OpenUtau.App.Embedding {
                 high = vm.PointToToneDouble(new Point()),
                 xLeft = at.X, xRight = at.X + vm.Bounds.Width,
                 yHigh = at.Y, yLow = at.Y + vm.Bounds.Height,
-                playhead = axis.TickPosToMsPos(DocManager.Inst.playPosTick) / 1000,
+                playhead = hostSeconds,
+                playheadX = playheadLine != null ? Canvas.GetLeft(playheadLine) : vm.PlayPosX,
+                modelPlayheadX = vm.PlayPosX,
+                expectedX = (axis.MsPosToNonExactTickPos(hostSeconds * 1000) - offset) * vm.TickWidth,
+                highlightVisible = playheadHighlight?.IsVisible ?? false,
+                lineVisible = playheadLine?.IsVisible ?? false,
+                externalViewWrites,
+                held, scrolling,
                 sequence = ++sequence,
             });
         }
@@ -199,7 +231,10 @@ namespace OpenUtau.App.Embedding {
         public void End() {
             if (!active) return;
             active = false;
+            roll.ViewModel.NotesViewModel.PropertyChanged -= ViewChanged;
+            roll.ViewModel.NotesViewModel.SetHostPlayPos(null);
             playheadLine?.SetCurrentValue(Control.IsVisibleProperty, playheadWasVisible);
+            playheadHighlight?.SetCurrentValue(Control.IsVisibleProperty, highlightWasVisible);
             foreach (var restore in restoreChrome) restore();
             restoreChrome.Clear();
             var vm = roll.ViewModel.NotesViewModel;

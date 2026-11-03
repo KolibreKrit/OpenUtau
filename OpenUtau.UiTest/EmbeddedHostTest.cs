@@ -156,6 +156,71 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        [Theory]
+        [InlineData("smooth")]
+        [InlineData("phrases")]
+        public void ShowcaseKeepsEveryFrameOnTheHostClock(string scrolling) {
+            var project = Core.Format.Ustx.Create();
+            var part = AddPart(project, 0, 0, 40);
+            project.AfterLoad();
+            WithPianoRoll(project, part, roll => {
+                var vm = roll.ViewModel.NotesViewModel;
+                var prefs = OpenUtau.Core.Util.Preferences.Default;
+                int autoScroll = prefs.PlaybackAutoScroll;
+                prefs.PlaybackAutoScroll = 1;
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(true);
+                HeadlessUi.Flush();
+                try {
+                    var plan = $"steer=1\tscroll={scrolling}\tbar=2\tshown=1\tswitches=0:1\tlines=1 0:0.5 0.5:1,1 2:2.5 2.5:3,1 4:4.5 4.5:5,1 6:6.5 6.5:7";
+                    double previousLeft = double.NegativeInfinity, previousWorld = double.NegativeInfinity;
+                    for (int frame = 0; frame < 960; ++frame) {
+                        double hostSeconds = frame / 120.0;
+                        stage.Update(plan, hostSeconds);
+                        double left = vm.TickOffset, width = vm.TickWidth;
+                        double expectedX = (project.timeAxis.MsPosToTickPos(hostSeconds * 1000) - part.position - left) * width;
+                        Assert.InRange(Math.Abs(vm.PlayPosX - expectedX), 0, 1);
+                        Assert.InRange(Math.Abs(Canvas.GetLeft(roll.FindControl<Control>("PlayPosLine")!) - expectedX), 0, 1);
+                        int coarseTick = project.timeAxis.MsPosToTickPos(Math.Max(0, Math.Floor(hostSeconds * 8) / 8 - 0.125) * 1000);
+                        DocManager.Inst.ExecuteCmd(new SetPlayPosTickNotification(coarseTick));
+                        HeadlessUi.Flush();
+                        Assert.Equal(left, vm.TickOffset);
+                        Assert.Equal(width, vm.TickWidth);
+                        Assert.InRange(Math.Abs(vm.PlayPosX - expectedX), 0, 1);
+                        Assert.False(roll.FindControl<Control>("PlayPosHighlight")!.IsVisible);
+                        Assert.True(left >= previousLeft - 0.001);
+                        double world = left + vm.PlayPosX / width;
+                        Assert.True(world >= previousWorld - 0.001);
+                        previousLeft = left;
+                        previousWorld = world;
+                        Assert.Equal(1, prefs.PlaybackAutoScroll);
+                    }
+                } finally {
+                    stage.End();
+                    Assert.Equal(1, prefs.PlaybackAutoScroll);
+                    prefs.PlaybackAutoScroll = autoScroll;
+                }
+            });
+        }
+
+        [Fact]
+        public void ShowcaseEndReleasesTheHostClockAndRestoresTheHighlight() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, roll => {
+                var vm = roll.ViewModel.NotesViewModel;
+                var highlight = roll.FindControl<Control>("PlayPosHighlight")!;
+                highlight.SetCurrentValue(Control.IsVisibleProperty, true);
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(false);
+                stage.Update("steer=1\tscroll=smooth\tbar=2\tswitches=0:1", 1);
+                stage.End();
+                stage.End();
+                Assert.True(highlight.IsVisible);
+                DocManager.Inst.ExecuteCmd(new SetPlayPosTickNotification(240, pause: true));
+                Assert.Equal((240 - first.position - vm.TickOffset) * vm.TickWidth, vm.PlayPosX);
+            });
+        }
+
         [Fact]
         public void ShowcaseUsesADarkRollAndRestoresTheEditingTheme() {
             var project = Project(out var first, out _);

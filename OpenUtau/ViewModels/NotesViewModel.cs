@@ -1078,7 +1078,24 @@ namespace OpenUtau.App.ViewModels {
             }
         }
 
+        double? hostPlayPosTick;
+
+        // A hosted presentation owns scrolling and the displayed clock until it releases this override.
+        // Keep the saved auto-scroll preference untouched, including if the host exits unexpectedly.
+        public void SetHostPlayPos(double? tick) {
+            hostPlayPosTick = tick;
+            SetPlayPos(DocManager.Inst.playPosTick, false);
+        }
+
         private void SetPlayPos(int tick, bool waitingRendering) {
+            if (hostPlayPosTick is double hostTick) {
+                double relative = hostTick - (Part?.position ?? 0);
+                PlayPosWaitingRendering = false;
+                playPosTick = PlayPosTick = (int)relative;
+                PlayPosX = TickToneToPoint(relative, 0).X;
+                UpdateHighlight();
+                return;
+            }
             PlayPosWaitingRendering = waitingRendering;
             if (waitingRendering) {
                 return;
@@ -1290,6 +1307,7 @@ namespace OpenUtau.App.ViewModels {
         }
 
         private void MaybeAutoScroll(double positionX) {
+            if (hostPlayPosTick.HasValue) return;
             var autoScrollPreference = Convert.ToBoolean(Preferences.Default.PlaybackAutoScroll);
             if (autoScrollPreference) {
                 AutoScroll(positionX);
