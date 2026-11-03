@@ -211,10 +211,7 @@ namespace OpenUtau.App.Embedding {
             var vm = roll.ViewModel.NotesViewModel;
             vm.BeginHostFrame(axis.MsPosToNonExactTickPos(seconds * 1000));
             var spans = partSpans.Where(p => p.Part.trackNo == track - 1).OrderBy(p => p.First).ToList();
-            var shownPart = spans.FirstOrDefault(p => p.First <= tick && tick < p.End)
-                ?? spans.FirstOrDefault(p => p.First > tick) ?? spans.LastOrDefault();
-            EmbeddedHost.ShowPartIn(roll, shownPart?.Part, tick, false);
-            if (vm.Part == null || vm.Bounds.Width <= 0) { vm.EndHostFrame(); return; }
+            if (spans.Count == 0 || vm.Bounds.Width <= 0) { vm.EndHostFrame(); return; }
             double pixels = vm.Bounds.Width * N("shown", 1);
             double width = Math.Max(1.2, pixels / 320), most = Math.Max(1.2, pixels / 240);
             double left, right;
@@ -245,13 +242,18 @@ namespace OpenUtau.App.Embedding {
                 double bars = Get("zoom") == "1" && Get("chorus").Split(',', StringSplitOptions.RemoveEmptyEntries)
                     .Select(v => v.Split(':')).Any(v => seconds >= Number(v[0]) && seconds < Number(v[1])) ? 3 : 4;
                 double span = bars * N("bar", 2);
-                left = axis.TickPosToMsPos(vm.Part.position + vm.TickOffset) / 1000;
+                left = axis.TickPosToMsPos((vm.Part?.position ?? 0) + vm.TickOffset) / 1000;
                 if (Get("scroll") == "smooth" && Get("still") != "1") left = seconds - span * 0.3;
                 else if (seconds < left || seconds >= left + span - 0.15) left = seconds - span * 0.05;
                 right = left + span;
                 centre = Centre(track, seconds - 1, seconds + 4);
             }
             double l = axis.MsPosToNonExactTickPos(left * 1000), r = axis.MsPosToNonExactTickPos(right * 1000);
+            var shownPart = spans.FirstOrDefault(p => p.First <= tick && tick < p.End)
+                ?? spans.FirstOrDefault(p => p.First > tick && p.First < r)
+                ?? spans.LastOrDefault(p => p.First <= tick) ?? spans.First();
+            EmbeddedHost.ShowPartIn(roll, shownPart.Part, tick, false);
+            if (vm.Part == null) { vm.EndHostFrame(); return; }
             if (Get("pitch") == "1" && centre.HasValue)
                 vm.TrackOffset = vm.TrackCount - 0.5 - centre.Value - N("middle", 0.5) * vm.ViewportTracks;
             vm.SetHostViewport(pixels / Math.Max(1, r - l), l - vm.Part.position);

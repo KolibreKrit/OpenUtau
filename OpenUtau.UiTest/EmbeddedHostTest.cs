@@ -358,6 +358,27 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        [Fact]
+        public void ShowcaseKeepsTheCurrentPartUntilTheNextPartIsOnItsPage() {
+            var project = Core.Format.Ustx.Create();
+            var first = AddPart(project, 0, 0, 4);
+            var next = AddPart(project, 0, 3840, 2);
+            project.AfterLoad();
+            WithPianoRoll(project, first, roll => {
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(true);
+                const string plan = "steer=1\tscroll=phrases\tbar=2\tswitches=0:1\tlines=1 0:1 1:2,1 4:4.5 4.5:5";
+                stage.Update(plan, 0.5);
+                double left = roll.ViewModel.NotesViewModel.TickOffset;
+                stage.Update(plan, 2.02);
+                Assert.Same(first, roll.ViewModel.NotesViewModel.Part);
+                Assert.Equal(left, roll.ViewModel.NotesViewModel.TickOffset);
+                stage.Update(plan, 3.6);
+                Assert.Same(next, roll.ViewModel.NotesViewModel.Part);
+                stage.End();
+            });
+        }
+
         [Theory]
         [InlineData("smooth")]
         [InlineData("phrases")]
