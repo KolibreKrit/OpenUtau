@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -369,6 +369,17 @@ namespace OpenUtau.App.Embedding {
             Import(Utf8(source) ?? throw new ArgumentNullException(nameof(source)),
                 Utf8(destination) ?? throw new ArgumentNullException(nameof(destination))));
 
+        [UnmanagedCallersOnly]
+        public static int ReadImportSingers(IntPtr callback, IntPtr context) => Guard("read import singers", () => {
+            Task.WhenAny(loading).Wait();
+            if (callback == IntPtr.Zero) throw new ArgumentNullException(nameof(callback));
+            var receive = Marshal.GetDelegateForFunctionPointer<TextFunction>(callback);
+            var bytes = Encoding.UTF8.GetBytes(ImportSingers.Catalog());
+            var pinned = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+            try { receive(context, pinned.AddrOfPinnedObject(), bytes.Length); }
+            finally { pinned.Free(); }
+        });
+
         /// <summary>The managed part of <see cref="ImportProject"/>. It refuses a destination that exists, and the
         /// USTX appears whole or not at all.</summary>
         public static void Import(string source, string destination) {
@@ -381,6 +392,8 @@ namespace OpenUtau.App.Embedding {
             // The phonemizer would answer the importer's requests through the open project.
             var project = DocManager.Inst.ReadWithoutPhonemizing(() => Core.Format.Formats.ReadProject(new[] { source }))
                 ?? throw new InvalidDataException($"No project in \"{source}\"");
+            if (Path.GetExtension(source).Equals(".svp", StringComparison.OrdinalIgnoreCase))
+                ImportSingers.Select(project, File.ReadAllText(source));
             project.ustxVersion = Core.Format.Ustx.kUstxVersion;
             project.FilePath = destination;
             project.BeforeSave();

@@ -10,7 +10,7 @@ namespace OpenUtau.Test.App {
     public class EmbeddedImportTest : IDisposable {
         // A SynthV 2 project on one line, as SynthV writes it, with two tracks and a second tempo. The second track
         // sings a library group moved by a bar and transposed up a tone.
-        const string Svp = "{\"version\":197,\"time\":{\"meter\":[{\"index\":0,\"numerator\":3,\"denominator\":4}]," +
+        internal const string Svp = "{\"version\":197,\"time\":{\"meter\":[{\"index\":0,\"numerator\":3,\"denominator\":4}]," +
             "\"tempo\":[{\"position\":0,\"bpm\":90.0},{\"position\":2822400000,\"bpm\":120.0}]}," +
             "\"library\":[{\"uuid\":\"verse\",\"name\":\"Verse\",\"notes\":[" +
             "{\"onset\":0,\"duration\":705600000,\"lyrics\":\"la\",\"pitch\":60}]}]," +
