@@ -186,6 +186,21 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        [Fact]
+        public void TwoEditsCannotPutTheirNotesInTheSameEmptySpace() {
+            var project = Project(out var first, out var second);
+            WithPianoRoll(project, first, pianoRoll => {
+                var notes = first.notes.ToArray();
+                var edits = notes.Select(note => new {
+                    track = 0, group = EmbeddedNoteEdits.Id(first), offset = first.position,
+                    before = new[] { new { position = note.position, duration = note.duration, tone = note.tone, lyric = note.lyric } },
+                    after = new[] { new { position = 2400, duration = 480, tone = note.tone, lyric = note.lyric } }
+                });
+                Assert.Equal("occupied", EmbeddedNoteEdits.Apply(project, JsonSerializer.Serialize(edits)));
+                Assert.Equal(notes, first.notes.ToArray());
+            });
+        }
+
         static void Seek(int tick) {
             DocManager.Inst.ExecuteCmd(new SeekPlayPosTickNotification(tick));
             HeadlessUi.Flush();

@@ -68,6 +68,12 @@ namespace OpenUtau.App.Embedding {
                 }
                 plans.Add((part, before, after));
             }
+            foreach (var together in plans.GroupBy(p => p.part)) {
+                var notes = together.SelectMany(p => p.after).OrderBy(n => n.position).ToArray();
+                for (var i = 1; i < notes.Length; ++i) {
+                    if (notes[i].position < notes[i - 1].End) return "occupied";
+                }
+            }
             DocManager.Inst.StartUndoGroup("command.note.lyric");
             try {
                 foreach (var (part, before, after) in plans) {
