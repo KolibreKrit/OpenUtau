@@ -629,6 +629,29 @@ namespace OpenUtau.App.Embedding {
             }
         });
 
+        // UTF-8 JSON note reads and conditional batch writes. Main thread; text lasts only for the callback.
+        [UnmanagedCallersOnly]
+        public static int ReadNoteEdits(IntPtr function, IntPtr context) => Guard("read editable notes", () => {
+            if (!Usable || !Dispatcher.UIThread.CheckAccess()) throw new InvalidOperationException("The piano roll isn't ready");
+            var selection = pianoRoll?.ViewModel.NotesViewModel.Selection.ToHashSet();
+            SendNoteText(function, context, EmbeddedNoteEdits.Snapshot(DocManager.Inst.Project, n => selection?.Contains(n) == true));
+        });
+
+        [UnmanagedCallersOnly]
+        public static int ApplyNoteEdits(IntPtr request, IntPtr function, IntPtr context) => Guard("edit notes", () => {
+            if (!Usable || !Dispatcher.UIThread.CheckAccess()) throw new InvalidOperationException("The piano roll isn't ready");
+            var result = EmbeddedNoteEdits.Apply(DocManager.Inst.Project, Marshal.PtrToStringUTF8(request) ?? "");
+            SendNoteText(function, context, result);
+        });
+
+        static void SendNoteText(IntPtr function, IntPtr context, string value) {
+            var text = System.Text.Encoding.UTF8.GetBytes(value + "\0");
+            var pinned = GCHandle.Alloc(text, GCHandleType.Pinned);
+            try {
+                Marshal.GetDelegateForFunctionPointer<TextFunction>(function)(context, pinned.AddrOfPinnedObject(), text.Length - 1);
+            } finally { pinned.Free(); }
+        }
+
         /// <summary>Takes the function OpenUtau tells of changes to, or null to stop. It is called on the main thread
         /// with 0 when what <see cref="ReadPhonemes"/> reports may have changed: when phonemes arrive, a project
         /// opens, or tracks, parts or notes change. It runs from the main thread's run loop, never within a call into

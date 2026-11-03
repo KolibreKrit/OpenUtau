@@ -141,6 +141,51 @@ namespace OpenUtau.UiTest {
             }
         });
 
+        [Fact]
+        public void NoteBatchChangesTwoPartsAndOneUndoRestoresBoth() {
+            var project = Project(out var first, out var second);
+            WithPianoRoll(project, first, pianoRoll => {
+                var a = first.notes.First();
+                var b = second.notes.First();
+                var beforeA = a.lyric;
+                var beforeB = b.lyric;
+                object edit(UVoicePart part, UNote note, string lyric) => new {
+                    track = part.trackNo, group = EmbeddedNoteEdits.Id(part), offset = part.position,
+                    before = new[] { new { position = note.position, duration = note.duration, tone = note.tone, lyric = note.lyric } },
+                    after = new[] { new { position = note.position, duration = note.duration, tone = note.tone + 2, lyric } }
+                };
+                var request = JsonSerializer.Serialize(new[] { edit(first, a, "new first"), edit(second, b, "new second") });
+                Assert.Equal("ok", EmbeddedNoteEdits.Apply(project, request));
+                Assert.Equal("new first", first.notes.First().lyric);
+                Assert.Equal("new second", second.notes.First().lyric);
+                DocManager.Inst.Undo();
+                Assert.Equal(beforeA, first.notes.First().lyric);
+                Assert.Equal(beforeB, second.notes.First().lyric);
+                Assert.Equal(a.tone, first.notes.First().tone);
+                Assert.Equal(b.tone, second.notes.First().tone);
+            });
+        }
+
+        [Fact]
+        public void StaleSourcePartMoveRefusesTheWholeNoteBatch() {
+            var project = Project(out var first, out var second);
+            WithPianoRoll(project, first, pianoRoll => {
+                var a = first.notes.First();
+                var b = second.notes.First();
+                var request = JsonSerializer.Serialize(new[] { new {
+                    track = 0, group = EmbeddedNoteEdits.Id(first), offset = first.position,
+                    before = new[] { new { position = a.position, duration = a.duration, tone = a.tone, lyric = a.lyric } },
+                    after = new[] { new { position = a.position, duration = a.duration, tone = 72, lyric = "changed" } },
+                    source = new[] { new { group = EmbeddedNoteEdits.Id(second), offset = second.position,
+                        position = b.position, duration = b.duration, tone = b.tone, lyric = b.lyric } }
+                } });
+                second.position += 480;
+                Assert.Equal("changed", EmbeddedNoteEdits.Apply(project, request));
+                Assert.Same(a, first.notes.First());
+                Assert.NotEqual("changed", a.lyric);
+            });
+        }
+
         static void Seek(int tick) {
             DocManager.Inst.ExecuteCmd(new SeekPlayPosTickNotification(tick));
             HeadlessUi.Flush();
