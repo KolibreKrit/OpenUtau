@@ -262,30 +262,34 @@ namespace OpenUtau.UiTest {
             }
         }
 
-        [Fact]
-        public void RedoInTheEmptyEmbeddedEditorRestoresItsLastPart() {
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void RedoWithNoPartOpenRestoresTheUndonePart(bool anotherPart) {
             var project = Core.Format.Ustx.Create();
             var original = AddPart(project, 0, 0, 1);
             WithPianoRoll(project, original, pianoRoll => {
                 var empty = Core.Format.Ustx.Create();
+                if (anotherPart) empty.parts.Add(new UVoicePart { trackNo = 0, Duration = 1920 });
                 DocManager.Inst.ExecuteCmd(new LoadProjectNotification(empty));
-                var part = new UVoicePart { trackNo = 0, Duration = 1920 };
+                var part = new UVoicePart { trackNo = 0, position = 1920, Duration = 1920 };
                 DocManager.Inst.StartUndoGroup("test");
                 DocManager.Inst.ExecuteCmd(new AddPartCommand(empty, part));
                 DocManager.Inst.EndUndoGroup();
                 DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, empty, 0));
                 DocManager.Inst.Undo();
                 HeadlessUi.Flush();
-                Assert.Empty(empty.parts);
+                Assert.Equal(anotherPart ? 1 : 0, empty.parts.Count);
                 Assert.Null(pianoRoll.ViewModel.NotesViewModel.Part);
 
-                EmbeddedHost.BindEmptyProjectUndo(pianoRoll, pianoRoll);
+                EmbeddedHost.BindEmptyEditorUndo(pianoRoll, pianoRoll);
                 var command = OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
                 pianoRoll.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent,
                     Key = Key.Z, KeyModifiers = command | KeyModifiers.Shift });
                 HeadlessUi.Flush();
 
-                Assert.Same(part, Assert.Single(empty.parts));
+                Assert.Equal(anotherPart ? 2 : 1, empty.parts.Count);
+                Assert.Contains(part, empty.parts);
                 Assert.Same(part, pianoRoll.ViewModel.NotesViewModel.Part);
             });
         }
