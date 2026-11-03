@@ -183,7 +183,7 @@ namespace OpenUtau.UiTest {
                 Assert.Equal(left, vm.TickOffset);
                 Assert.Empty(stage.RenderedFrame);
                 HeadlessUi.Flush();
-                Assert.Equal(project.timeAxis.MsPosToTickPos(600), vm.TickOffset);
+                Assert.Equal(project.timeAxis.MsPosToNonExactTickPos(600), vm.TickOffset, 6);
                 stage.RequestFrame(plan, 4, roll);
                 stage.End();
                 double restored = vm.TickOffset;
@@ -260,6 +260,27 @@ namespace OpenUtau.UiTest {
                 vm.EndHostFrame();
                 Assert.Equal((tick - part.position - vm.TickOffset) * vm.TickWidth, vm.PlayPosX);
                 stage.End();
+            });
+        }
+
+        [Fact]
+        public void ShowcaseOwnsTheViewportUntilEditingResumes() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, roll => {
+                var vm = roll.ViewModel.NotesViewModel;
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(false);
+                stage.Update("steer=1\tscroll=smooth\tbar=2\tswitches=0:1", 1);
+                double left = vm.TickOffset, width = vm.TickWidth;
+                vm.TickOffset = left + 480;
+                vm.TickWidth = width * 2;
+                Assert.Equal(left, vm.TickOffset);
+                Assert.Equal(width, vm.TickWidth);
+                stage.End();
+                vm.TickOffset = 480;
+                vm.TickWidth = 0.4;
+                Assert.Equal(480, vm.TickOffset);
+                Assert.Equal(0.4, vm.TickWidth);
             });
         }
 
@@ -389,8 +410,7 @@ namespace OpenUtau.UiTest {
                 var stage = new EmbeddedShowcase(roll);
                 stage.Begin(true);
                 EmbeddedHost.ShowPartIn(roll, 1, 1920);
-                vm.TickWidth = 0.7;
-                vm.TickOffset = 900;
+                vm.SetHostViewport(0.7, 900);
                 vm.TrackOffset = 30;
                 stage.End();
                 Assert.Same(first, vm.Part);

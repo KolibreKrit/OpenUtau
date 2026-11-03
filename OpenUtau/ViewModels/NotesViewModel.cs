@@ -38,12 +38,20 @@ namespace OpenUtau.App.ViewModels {
         [Reactive] public partial Rect Bounds { get; set; }
         public int TickCount => Part?.Duration ?? 480 * 4;
         public int TrackCount => ViewConstants.MaxTone;
-        [Reactive] public partial double TickWidth { get; set; }
+        double tickWidth, tickOffset;
+        // A hosted presentation owns the camera; scrollbar coercion and editor gestures cannot write it back.
+        public double TickWidth {
+            get => tickWidth;
+            set { if (!hostPlayPosTick.HasValue) this.RaiseAndSetIfChanged(ref tickWidth, value); }
+        }
         public double TrackHeightMin => ViewConstants.NoteHeightMin;
         public double TrackHeightMax => ViewConstants.NoteHeightMax;
         [Reactive] public partial double TrackHeight { get; set; }
         [Reactive] public partial int TickOrigin { get; set; }
-        [Reactive] public partial double TickOffset { get; set; }
+        public double TickOffset {
+            get => tickOffset;
+            set { if (!hostPlayPosTick.HasValue) this.RaiseAndSetIfChanged(ref tickOffset, value); }
+        }
         [Reactive] public partial double TrackOffset { get; set; }
         [Reactive] public partial int SnapDiv { get; set; }
         [Reactive] public partial int Key { get; set; }
@@ -1093,6 +1101,11 @@ namespace OpenUtau.App.ViewModels {
         public void BeginHostFrame(double tick) {
             hostViewChanging = true;
             hostPlayPosTick = tick;
+        }
+
+        public void SetHostViewport(double width, double offset) {
+            this.RaiseAndSetIfChanged(ref tickWidth, width, nameof(TickWidth));
+            this.RaiseAndSetIfChanged(ref tickOffset, offset, nameof(TickOffset));
         }
 
         public void EndHostFrame() {

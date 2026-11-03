@@ -242,11 +242,10 @@ namespace OpenUtau.App.Embedding {
                 right = left + span;
                 centre = Centre(track, seconds - 1, seconds + 4);
             }
-            double l = axis.MsPosToTickPos(left * 1000), r = axis.MsPosToTickPos(right * 1000);
-            vm.TickWidth = pixels / Math.Max(1, r - l);
-            vm.TickOffset = l - vm.Part.position;
+            double l = axis.MsPosToNonExactTickPos(left * 1000), r = axis.MsPosToNonExactTickPos(right * 1000);
             if (Get("pitch") == "1" && centre.HasValue)
                 vm.TrackOffset = vm.TrackCount - 0.5 - centre.Value - N("middle", 0.5) * vm.ViewportTracks;
+            vm.SetHostViewport(pixels / Math.Max(1, r - l), l - vm.Part.position);
             vm.EndHostFrame();
             playheadHighlight?.SetCurrentValue(Control.IsVisibleProperty, false);
         }
