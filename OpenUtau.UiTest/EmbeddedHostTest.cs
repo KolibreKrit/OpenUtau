@@ -143,6 +143,82 @@ namespace OpenUtau.UiTest {
         });
 
         [Fact]
+        public void ShowcaseTurnsToTheNextPhraseBeforeItsFirstWord() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, roll => {
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(false);
+                const string plan = "steer=1\tscroll=phrases\tpitch=1\tshown=1\tstill=1\tswitches=0:1\tlines=1 0:0.5,1 1.5:2";
+                stage.Update(plan, 0);
+                var vm = roll.ViewModel.NotesViewModel;
+                var left = vm.TickOffset;
+                stage.Update(plan, 0.8);
+                Assert.Equal(left, vm.TickOffset);
+                stage.Update(plan, 1.1);
+                Assert.True(vm.TickOffset > left + 400);
+                stage.End();
+            });
+        }
+
+        [Fact]
+        public void ShowcaseFollowsSingersAndKeepsEachPhraseInAStillFrame() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, roll => {
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(false);
+                const string plan = "steer=1\tscroll=phrases\tpitch=1\tbar=2\tshown=1\tmiddle=0.4\tswitches=0:1,2:2\tlines=1 0:0.5 0.5:1,2 2:2.5 2.5:3";
+                stage.Update(plan, 0.2);
+                var vm = roll.ViewModel.NotesViewModel;
+                var left = vm.TickOffset;
+                stage.Update(plan, 0.7);
+                Assert.Equal(left, vm.TickOffset);
+                stage.Update(plan, 2.1);
+                Assert.Equal(1, vm.Part!.trackNo);
+                Assert.InRange(vm.TickWidth * 960, 240, 321);
+                stage.End();
+            });
+        }
+
+        [Fact]
+        public void ShowcaseHidesChromeAndRestoresItsLayout() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, roll => {
+                var before = roll.ViewModel.NotesViewModel.Bounds;
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(true);
+                HeadlessUi.Flush();
+                Assert.True(roll.ViewModel.NotesViewModel.Bounds.Height > before.Height + 100);
+                stage.End();
+                HeadlessUi.Flush();
+                Assert.Equal(before, roll.ViewModel.NotesViewModel.Bounds);
+            });
+        }
+
+        [Fact]
+        public void ShowcaseRestoresTheShownPartAndItsScrollAndZoom() {
+            var project = Project(out var first, out var second);
+            WithPianoRoll(project, first, roll => {
+                var vm = roll.ViewModel.NotesViewModel;
+                vm.TickWidth = 0.3;
+                vm.TickOffset = 240;
+                vm.TrackHeight = 18;
+                vm.TrackOffset = 50;
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(true);
+                EmbeddedHost.ShowPartIn(roll, 1, 1920);
+                vm.TickWidth = 0.7;
+                vm.TickOffset = 900;
+                vm.TrackOffset = 30;
+                stage.End();
+                Assert.Same(first, vm.Part);
+                Assert.Equal(0.3, vm.TickWidth);
+                Assert.Equal(240, vm.TickOffset);
+                Assert.Equal(18, vm.TrackHeight);
+                Assert.Equal(50, vm.TrackOffset);
+            });
+        }
+
+        [Fact]
         public void NoteBatchChangesTwoPartsAndOneUndoRestoresBoth() {
             var project = Project(out var first, out var second);
             WithPianoRoll(project, first, pianoRoll => {

@@ -825,6 +825,48 @@ namespace OpenUtau.App.Embedding {
             return failed != 0 ? failed : result;
         }
 
+        static EmbeddedShowcase? showcase;
+        static string showcasePlan = "";
+        static bool trackBarVisible;
+
+        /// <summary>Captures the roll before Stage placement. A nonzero flag hides editor chrome until EndShowcase.</summary>
+        [UnmanagedCallersOnly]
+        public static int BeginShowcase(int hideChrome) => Guard("begin showcase", () => {
+            if (!ready || pianoRoll == null || showcase != null) throw new InvalidOperationException("Piano roll isn't ready");
+            showcase = new EmbeddedShowcase(pianoRoll);
+            showcase.Begin(hideChrome != 0);
+            trackBarVisible = trackBar?.IsVisible ?? false;
+            if (hideChrome != 0 && trackBar != null) trackBar.IsVisible = false;
+        });
+
+        /// <summary>Accepts the host's instance plan, using the Showcase script's tab-separated fields.</summary>
+        [UnmanagedCallersOnly]
+        public static int UpdateShowcase(IntPtr plan) => Guard("update showcase", () => {
+            showcasePlan = Utf8(plan) ?? "";
+        });
+
+        /// <summary>Steers the roll and returns its canvas in the embedded editor's points as UTF-8 JSON.</summary>
+        [UnmanagedCallersOnly]
+        public static int ReadShowcase(IntPtr function, IntPtr context) => Guard("read showcase", () => {
+            if (showcase == null || editor == null) throw new InvalidOperationException("Stage hasn't begun");
+            showcase.Update(showcasePlan, DocManager.Inst.Project.timeAxis.TickPosToMsPos(DocManager.Inst.playPosTick) / 1000);
+            var text = Encoding.UTF8.GetBytes(showcase.Snapshot(editor));
+            var pinned = GCHandle.Alloc(text, GCHandleType.Pinned);
+            try {
+                Marshal.GetDelegateForFunctionPointer<TextFunction>(function)(context, pinned.AddrOfPinnedObject(), text.Length);
+            } finally { pinned.Free(); }
+        });
+
+        /// <summary>Restores the editor captured before Preview or Record, including its shown part and chrome.</summary>
+        [UnmanagedCallersOnly]
+        public static int EndShowcase() => Guard("end showcase", () => {
+            if (showcase == null) return;
+            showcase.End();
+            showcase = null;
+            showcasePlan = "";
+            if (trackBar != null) trackBar.IsVisible = trackBarVisible;
+        });
+
         /// <summary>Moves OpenUtau's playhead to the application's play head, in milliseconds from the project's start,
         /// as the DAW Integration's <c>playhead</c> does. Main thread.</summary>
         [UnmanagedCallersOnly]
