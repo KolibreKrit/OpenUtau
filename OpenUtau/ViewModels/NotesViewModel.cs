@@ -38,12 +38,20 @@ namespace OpenUtau.App.ViewModels {
         [Reactive] public partial Rect Bounds { get; set; }
         public int TickCount => Part?.Duration ?? 480 * 4;
         public int TrackCount => ViewConstants.MaxTone;
-        [Reactive] public partial double TickWidth { get; set; }
+        double tickWidth, tickOffset;
+        // A hosted presentation owns the camera; scrollbar coercion and editor gestures cannot write it back.
+        public double TickWidth {
+            get => tickWidth;
+            set { if (!hostPlayPosTick.HasValue) this.RaiseAndSetIfChanged(ref tickWidth, value); }
+        }
         public double TrackHeightMin => ViewConstants.NoteHeightMin;
         public double TrackHeightMax => ViewConstants.NoteHeightMax;
         [Reactive] public partial double TrackHeight { get; set; }
         [Reactive] public partial int TickOrigin { get; set; }
-        [Reactive] public partial double TickOffset { get; set; }
+        public double TickOffset {
+            get => tickOffset;
+            set { if (!hostPlayPosTick.HasValue) this.RaiseAndSetIfChanged(ref tickOffset, value); }
+        }
         [Reactive] public partial double TrackOffset { get; set; }
         [Reactive] public partial int SnapDiv { get; set; }
         [Reactive] public partial int Key { get; set; }
@@ -1078,7 +1086,43 @@ namespace OpenUtau.App.ViewModels {
             }
         }
 
+        double? hostPlayPosTick;
+        bool hostViewChanging;
+
+        // A hosted presentation owns scrolling and the displayed clock until it releases this override.
+        // Keep the saved auto-scroll preference untouched, including if the host exits unexpectedly.
+        public void SetHostPlayPos(double? tick) {
+            hostViewChanging = false;
+            hostPlayPosTick = tick;
+            SetPlayPos(DocManager.Inst.playPosTick, false);
+        }
+
+        // Publish the playhead only after both the camera and host time describe the completed frame.
+        public void BeginHostFrame(double tick) {
+            hostViewChanging = true;
+            hostPlayPosTick = tick;
+        }
+
+        public void SetHostViewport(double width, double offset) {
+            this.RaiseAndSetIfChanged(ref tickWidth, width, nameof(TickWidth));
+            this.RaiseAndSetIfChanged(ref tickOffset, offset, nameof(TickOffset));
+        }
+
+        public void EndHostFrame() {
+            hostViewChanging = false;
+            SetPlayPos(DocManager.Inst.playPosTick, false);
+        }
+
         private void SetPlayPos(int tick, bool waitingRendering) {
+            if (hostViewChanging) return;
+            if (hostPlayPosTick is double hostTick) {
+                double relative = hostTick - (Part?.position ?? 0);
+                PlayPosWaitingRendering = false;
+                playPosTick = PlayPosTick = (int)relative;
+                PlayPosX = TickToneToPoint(relative, 0).X;
+                UpdateHighlight();
+                return;
+            }
             PlayPosWaitingRendering = waitingRendering;
             if (waitingRendering) {
                 return;
@@ -1290,6 +1334,7 @@ namespace OpenUtau.App.ViewModels {
         }
 
         private void MaybeAutoScroll(double positionX) {
+            if (hostPlayPosTick.HasValue) return;
             var autoScrollPreference = Convert.ToBoolean(Preferences.Default.PlaybackAutoScroll);
             if (autoScrollPreference) {
                 AutoScroll(positionX);

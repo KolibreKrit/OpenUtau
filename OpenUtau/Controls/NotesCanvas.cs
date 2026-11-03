@@ -363,6 +363,8 @@ namespace OpenUtau.App.Controls {
         static Rect Inflate(Point leftTop, Size size, double d) =>
             new Rect(leftTop.X - d, leftTop.Y - d, size.Width + d * 2, size.Height + d * 2);
 
+        internal event Action<DrawingContext>? HostedFrame;
+
         public override void Render(DrawingContext context) {
             base.Render(context);
             if (Part == null) {
@@ -429,6 +431,7 @@ namespace OpenUtau.App.Controls {
             } finally {
                 renderPassActive = false;
             }
+            HostedFrame?.Invoke(context);
         }
 
         private void DrawBackgroundForHitTest(DrawingContext context) {
