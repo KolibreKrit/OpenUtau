@@ -14,6 +14,8 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Embedding;
 using Avalonia.Controls.Primitives;
 using Avalonia.Media;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Platform;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -232,6 +234,7 @@ namespace OpenUtau.App.Embedding {
                 var bar = trackBar = new TrackBar(ShowTrack);
                 DockPanel.SetDock(bar, Dock.Top);
                 editor = new DockPanel { Children = { bar, pianoRoll } };
+                BindEmptyEditorUndo(editor, pianoRoll);
                 // A menu or tooltip that is a window of its own opens away from what opened it, as far right and down
                 // as the piano roll is from the corner of the application's window. A tooltip takes the setting from
                 // the control that has it, not from its popup.
@@ -390,6 +393,48 @@ namespace OpenUtau.App.Embedding {
         [UnmanagedCallersOnly]
         public static int ReadImportedSingers(IntPtr callback, IntPtr context) => Guard("read imported singers", () =>
             SendText(callback, context, importedSingers));
+
+        // The embedded editor has no main window to receive Undo and Redo when no part is open.
+        public static void BindEmptyEditorUndo(Control root, PianoRoll view) {
+            root.AddHandler(InputElement.KeyDownEvent, (_, args) => {
+                if (args.Handled || view.ViewModel.NotesViewModel.Part != null) return;
+                if (TopLevel.GetTopLevel(root)?.FocusManager?.GetFocusedElement() is TextBox field
+                    && field.IsEnabled && field.IsEffectivelyVisible && field.IsFocused) return;
+                var command = OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
+                if (args.Key != Key.Z || (args.KeyModifiers != command && args.KeyModifiers != (command | KeyModifiers.Shift))) return;
+                var before = new HashSet<UPart>(DocManager.Inst.Project.parts);
+                if (args.KeyModifiers.HasFlag(KeyModifiers.Shift)) DocManager.Inst.Redo();
+                else DocManager.Inst.Undo();
+                var project = DocManager.Inst.Project;
+                var part = project.parts.OfType<UVoicePart>().FirstOrDefault(part => !before.Contains(part));
+                if (part != null) {
+                    DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, project, part.position));
+                    view.AttachExpressions();
+                }
+                args.Handled = true;
+            }, RoutingStrategies.Bubble);
+        }
+
+        [UnmanagedCallersOnly]
+        public static int NewProject(IntPtr destination) => Guard("new project", () =>
+            CreateProject(Utf8(destination) ?? throw new ArgumentNullException(nameof(destination))));
+
+        public static void CreateProject(string destination) {
+            if (File.Exists(destination)) throw new IOException($"\"{destination}\" already exists");
+            var project = Core.Format.Ustx.Create();
+            project.tracks.Clear();
+            project.FilePath = destination;
+            project.ustxVersion = Core.Format.Ustx.kUstxVersion;
+            project.BeforeSave();
+            var partial = destination + ".creating";
+            try {
+                File.WriteAllText(partial, Yaml.DefaultSerializer.Serialize(project), Encoding.UTF8);
+                File.Move(partial, destination);
+            } finally {
+                project.AfterSave();
+                File.Delete(partial);
+            }
+        }
 
         /// <summary>The managed part of <see cref="ImportProject"/>. It refuses a destination that exists, and the
         /// USTX appears whole or not at all.</summary>
@@ -582,6 +627,17 @@ namespace OpenUtau.App.Embedding {
             ShowWhenUsable(() => {
                 ShowTrack(trackNo);
                 Dispatcher.UIThread.Post(() => trackBar?.ShowSingerMenu(trackNo), DispatcherPriority.Background);
+                return true;
+            });
+        });
+
+        [UnmanagedCallersOnly]
+        public static int ReadShownTrack() => pianoRoll?.ViewModel.NotesViewModel.Part?.trackNo ?? -1;
+
+        [UnmanagedCallersOnly]
+        public static int ShowAddSingerMenu() => Guard("show add singer menu", () => {
+            ShowWhenUsable(() => {
+                Dispatcher.UIThread.Post(() => trackBar?.ShowAddSingerMenu(), DispatcherPriority.Background);
                 return true;
             });
         });
