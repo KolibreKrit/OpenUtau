@@ -391,6 +391,27 @@ namespace OpenUtau.App.Embedding {
         public static int ReadImportedSingers(IntPtr callback, IntPtr context) => Guard("read imported singers", () =>
             SendText(callback, context, importedSingers));
 
+        [UnmanagedCallersOnly]
+        public static int NewProject(IntPtr destination) => Guard("new project", () =>
+            CreateProject(Utf8(destination) ?? throw new ArgumentNullException(nameof(destination))));
+
+        public static void CreateProject(string destination) {
+            if (File.Exists(destination)) throw new IOException($"\"{destination}\" already exists");
+            var project = Core.Format.Ustx.Create();
+            project.tracks.Clear();
+            project.FilePath = destination;
+            project.ustxVersion = Core.Format.Ustx.kUstxVersion;
+            project.BeforeSave();
+            var partial = destination + ".creating";
+            try {
+                File.WriteAllText(partial, Yaml.DefaultSerializer.Serialize(project), Encoding.UTF8);
+                File.Move(partial, destination);
+            } finally {
+                project.AfterSave();
+                File.Delete(partial);
+            }
+        }
+
         /// <summary>The managed part of <see cref="ImportProject"/>. It refuses a destination that exists, and the
         /// USTX appears whole or not at all.</summary>
         public static string Import(string source, string destination) {
@@ -582,6 +603,14 @@ namespace OpenUtau.App.Embedding {
             ShowWhenUsable(() => {
                 ShowTrack(trackNo);
                 Dispatcher.UIThread.Post(() => trackBar?.ShowSingerMenu(trackNo), DispatcherPriority.Background);
+                return true;
+            });
+        });
+
+        [UnmanagedCallersOnly]
+        public static int ShowAddSingerMenu() => Guard("show add singer menu", () => {
+            ShowWhenUsable(() => {
+                Dispatcher.UIThread.Post(() => trackBar?.ShowAddSingerMenu(), DispatcherPriority.Background);
                 return true;
             });
         });

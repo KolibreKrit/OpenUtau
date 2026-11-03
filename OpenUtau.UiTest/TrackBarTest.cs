@@ -148,6 +148,36 @@ namespace OpenUtau.UiTest {
         }
 
         [Fact]
+        public void AddSingerCreatesAnEmptyPartAndUndoRemovesTheWholeSinger() {
+            var project = Project();
+            var soprano = new Singer("Soprano");
+            WithBar(project, (bar, shown) => WithInstalled(soprano, () => {
+                Click(TabButton(bar, "Add singer…"));
+                Click(TopLevel.GetTopLevel(bar)!.GetVisualDescendants().OfType<Border>().Single(tile =>
+                    tile.Classes.Contains("singerTile") && (tile.DataContext as SingerTileViewModel)?.Singer == soprano));
+                Assert.Equal(3, project.tracks.Count);
+                Assert.Equal("Soprano", project.tracks[2].TrackName);
+                Assert.Same(soprano, project.tracks[2].Singer);
+                Assert.Equal(soprano.Id, Preferences.Default.RecentSingers.First());
+                var part = Assert.Single(project.parts.OfType<UVoicePart>(), part => part.trackNo == 2);
+                Assert.Empty(part.notes);
+                Assert.True(part.Duration >= 1920);
+                Assert.Equal(2, shown.Last());
+
+                DocManager.Inst.Undo();
+                HeadlessUi.Flush();
+                Assert.Equal(2, project.tracks.Count);
+                Assert.DoesNotContain(project.parts, part => part.trackNo == 2);
+
+                DocManager.Inst.Redo();
+                HeadlessUi.Flush();
+                Assert.Equal(3, project.tracks.Count);
+                Assert.Same(soprano, project.tracks[2].Singer);
+                Assert.Same(part, Assert.Single(project.parts, part => part.trackNo == 2));
+            }));
+        }
+
+        [Fact]
         public void EachTrackHasATabNamingItsSinger() {
             WithBar(Project(), (bar, _) => {
                 Assert.Equal(new[] { "Lead · Alto", "Harmony · No singer" }, bar.Tabs.Select(tab => tab.Text));

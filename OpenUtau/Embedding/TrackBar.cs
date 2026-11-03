@@ -13,6 +13,8 @@ using OpenUtau.App.ViewModels;
 using OpenUtau.App.Views;
 using OpenUtau.Core;
 using OpenUtau.Core.Ustx;
+using OpenUtau.Core.Util;
+using ReactiveUI;
 
 namespace OpenUtau.App.Embedding {
     /// <summary>
@@ -26,6 +28,7 @@ namespace OpenUtau.App.Embedding {
         readonly StackPanel tabs = new() { Orientation = Orientation.Horizontal, Spacing = 2, Margin = new Thickness(4, 2) };
         // The part the piano roll shows, whose track's tab is the shown one.
         UPart? shownPart;
+        readonly Button addSinger = new() { Content = "Add singer…", Focusable = false, Margin = new Thickness(4, 0) };
         readonly Dictionary<int, Control> menuAnchors = new();
 
         /// <param name="showTrack">Shows the track of the given number in the piano roll.</param>
@@ -39,6 +42,7 @@ namespace OpenUtau.App.Embedding {
                     new Setter(PaddingProperty, new Thickness(5)),
                 },
             });
+            addSinger.Click += (_, _) => ShowAddSingerMenu();
             Content = new ScrollViewer {
                 HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
@@ -86,6 +90,9 @@ namespace OpenUtau.App.Embedding {
             foreach (var tab in Tabs) {
                 tabs.Children.Add(View(tab));
             }
+            addSinger.IsEnabled = project.tracks.Count < 16;
+            ToolTip.SetTip(addSinger, addSinger.IsEnabled ? "Add an empty singer" : "All 16 output pairs are in use");
+            tabs.Children.Add(addSinger);
         }
 
         // A track holding only audio has no notes to show, and its singer sings nothing.
@@ -133,26 +140,63 @@ namespace OpenUtau.App.Embedding {
             return view;
         }
 
-        // As the track header opens it, with Advanced below the singers.
-        static void ShowMenu(TrackTab tab, Control anchor) {
+        public void ShowAddSingerMenu() {
+            ShowPicker(new SingerFlyoutViewModel(() => null, ReactiveCommand.Create<USinger>(AddSinger)), addSinger);
+        }
+
+        void AddSinger(USinger singer) {
+            var project = DocManager.Inst.Project;
+            if (!singer.Found || project.tracks.Count >= 16) return;
+            var name = singer.LocalizedName;
+            var named = name;
+            for (int number = 2; project.tracks.Any(track => track.TrackName == named); ++number) named = $"{name} {number}";
+            var track = new UTrack(project) {
+                TrackNo = project.tracks.Count,
+                TrackName = named,
+                Singer = singer,
+                Phonemizer = SingerManager.PhonemizerFor(singer)?.Create() ?? new DefaultPhonemizer(),
+                RendererSettings = new URenderSettings { renderer = Core.Render.Renderers.GetDefaultRenderer(singer.SingerType) },
+            };
+            var meter = project.timeSignatures[0];
+            var part = new UVoicePart {
+                trackNo = track.TrackNo, position = 0, name = named,
+                Duration = project.resolution * meter.beatPerBar * 16 / meter.beatUnit,
+            };
+            DocManager.Inst.StartUndoGroup("command.track.add");
             try {
-                var header = tab.Menu();
-                var singers = new SingerFlyoutViewModel(() => header.Singer, header.SelectSingerCommand);
+                DocManager.Inst.ExecuteCmd(new AddTrackCommand(project, track));
+                DocManager.Inst.ExecuteCmd(new AddPartCommand(project, part));
+            } finally {
+                DocManager.Inst.EndUndoGroup();
+            }
+            Preferences.Default.RecentSingers.Remove(singer.Id);
+            Preferences.Default.RecentSingers.Insert(0, singer.Id);
+            if (Preferences.Default.RecentSingers.Count > 16) Preferences.Default.RecentSingers.RemoveRange(16, Preferences.Default.RecentSingers.Count - 16);
+            Preferences.Save();
+            showTrack(track.TrackNo);
+        }
+
+        static void ShowMenu(TrackTab tab, Control anchor) {
+            var header = tab.Menu();
+            ShowPicker(new SingerFlyoutViewModel(() => header.Singer, header.SelectSingerCommand), anchor, Advanced(header, tab));
+        }
+
+        static void ShowPicker(SingerFlyoutViewModel singers, Control anchor, Control? advanced = null) {
+            try {
                 var content = new SingerFlyout { DataContext = singers };
-                Flyout? flyoutForInstall = null;
-                Control advanced = Advanced(header, tab);
-                if (SingerManager.Inst.Singers.Count == 0) {
-                    var install = new Button { Content = "Install singer…", Margin = new Thickness(0, 4, 0, 0) };
-                    install.Click += (_, _) => { flyoutForInstall?.Hide(); InstallSinger(); };
-                    advanced = new StackPanel { Children = { install, advanced } };
-                }
-                DockPanel.SetDock(advanced, Dock.Bottom);
+                var footer = new StackPanel();
                 var flyout = new Flyout {
-                    Content = new DockPanel { Children = { advanced, content } },
                     Placement = PlacementMode.BottomEdgeAlignedLeft,
                     ShowMode = FlyoutShowMode.Standard,
                 };
-                flyoutForInstall = flyout;
+                if (SingerManager.Inst.Singers.Count == 0) {
+                    var install = new Button { Content = "Install singer…", Margin = new Thickness(0, 4, 0, 0) };
+                    install.Click += (_, _) => { flyout.Hide(); InstallSinger(); };
+                    footer.Children.Add(install);
+                }
+                if (advanced != null) footer.Children.Add(advanced);
+                DockPanel.SetDock(footer, Dock.Bottom);
+                flyout.Content = new DockPanel { Children = { footer, content } };
                 flyout.FlyoutPresenterClasses.Add("singerFlyout");
                 singers.CloseRequested += flyout.Hide;
                 flyout.Opened += (_, _) => DocManager.Inst.AddSubscriber(singers);

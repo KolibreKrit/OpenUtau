@@ -36,6 +36,16 @@ namespace OpenUtau.Test.App {
         }
 
         [Fact]
+        public void ANewProjectNeedsNoImportedNotesOrSinger() {
+            var destination = Path.Combine(folder, "empty.ustx");
+            EmbeddedHost.CreateProject(destination);
+            Assert.True(File.Exists(destination));
+            var project = Ustx.Load(destination);
+            Assert.Empty(project.tracks);
+            Assert.Empty(project.parts);
+        }
+
+        [Fact]
         public void ImportSavesTheSvpAsAUstxWithItsTracksNotesAndTempo() {
             var source = Write("song.svp", Svp + "\0");
             var destination = Path.Combine(folder, "song.ustx");
