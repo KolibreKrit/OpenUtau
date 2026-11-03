@@ -156,6 +156,30 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        [Fact]
+        public void ShowcaseCoalescesHostUpdatesUntilTheRenderFrame() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, roll => {
+                var vm = roll.ViewModel.NotesViewModel;
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(false);
+                const string plan = "steer=1\tscroll=smooth\tbar=2\tswitches=0:1";
+                stage.Update(plan, 1);
+                double left = vm.TickOffset;
+                stage.RequestFrame(plan, 2, roll);
+                stage.RequestFrame(plan, 3, roll);
+                Assert.Equal(left, vm.TickOffset);
+                Assert.Empty(stage.RenderedFrame);
+                HeadlessUi.Flush();
+                Assert.Equal(project.timeAxis.MsPosToTickPos(600), vm.TickOffset);
+                stage.RequestFrame(plan, 4, roll);
+                stage.End();
+                double restored = vm.TickOffset;
+                HeadlessUi.Flush();
+                Assert.Equal(restored, vm.TickOffset);
+            });
+        }
+
         [Theory]
         [InlineData("smooth")]
         [InlineData("phrases")]

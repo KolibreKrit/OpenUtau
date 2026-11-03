@@ -854,8 +854,8 @@ namespace OpenUtau.App.Embedding {
         [UnmanagedCallersOnly]
         public static int ReadShowcase(double seconds, IntPtr function, IntPtr context) => Guard("read showcase", () => {
             if (showcase == null || editor == null) throw new InvalidOperationException("Stage hasn't begun");
-            showcase.Update(showcasePlan, seconds);
-            var text = Encoding.UTF8.GetBytes(showcase.Snapshot(editor));
+            showcase.RequestFrame(showcasePlan, seconds, editor);
+            var text = Encoding.UTF8.GetBytes(showcase.RenderedFrame);
             var pinned = GCHandle.Alloc(text, GCHandleType.Pinned);
             try {
                 Marshal.GetDelegateForFunctionPointer<TextFunction>(function)(context, pinned.AddrOfPinnedObject(), text.Length);

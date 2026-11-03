@@ -4,9 +4,12 @@ using System.Linq;
 using System.Globalization;
 using System.Text.Json;
 using System.ComponentModel;
+using System.Threading;
+using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.VisualTree;
+using Avalonia.Rendering.Composition;
 using OpenUtau.App.Controls;
 using OpenUtau.Core;
 using OpenUtau.Core.Ustx;
@@ -23,10 +26,42 @@ namespace OpenUtau.App.Embedding {
         bool held;
         string scrolling = "";
         long externalViewWrites;
+        double inputHostSeconds, pendingSeconds;
+        string pendingPlan = "", renderedFrame = "";
+        bool frameQueued, frameInFlight;
         string theme = "Light";
         readonly List<Action> restoreChrome = new();
 
         public EmbeddedShowcase(PianoRoll roll) { this.roll = roll; }
+
+        public string RenderedFrame => Volatile.Read(ref renderedFrame);
+
+        // The overlay reads only the camera and clock of a batch the compositor has drawn. New host samples
+        // coalesce until the next render frame, so a faster JUCE display callback cannot run ahead of the roll.
+        public void RequestFrame(string plan, double seconds, Control origin) {
+            pendingPlan = plan;
+            pendingSeconds = seconds;
+            if (!active || frameQueued || Volatile.Read(ref frameInFlight)) return;
+            var top = TopLevel.GetTopLevel(roll);
+            if (top == null) return;
+            frameQueued = true;
+            top.RequestAnimationFrame(_ => {
+                frameQueued = false;
+                if (!active) return;
+                Volatile.Write(ref frameInFlight, true);
+                Update(pendingPlan, pendingSeconds);
+                var compositor = ElementComposition.GetElementVisual(roll)!.Compositor;
+                var batch = compositor.RequestCompositionBatchCommitAsync();
+                compositor.RequestCompositionUpdate(() => {
+                    if (!active) { Volatile.Write(ref frameInFlight, false); return; }
+                    string snapshot = Snapshot(origin);
+                    batch.Rendered.ContinueWith(_ => {
+                        if (Volatile.Read(ref active)) Volatile.Write(ref renderedFrame, snapshot);
+                        Volatile.Write(ref frameInFlight, false);
+                    }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                });
+            });
+        }
 
         public void Begin(bool hideChrome) {
             if (active) return;
@@ -140,6 +175,7 @@ namespace OpenUtau.App.Embedding {
             string Get(string key, string fallback = "") => f.GetValueOrDefault(key, fallback);
             double N(string key, double fallback) => Get(key) is var v && v.Length > 0 ? Number(v) : fallback;
             if (Get("steer") != "1") return;
+            inputHostSeconds = seconds;
             seconds = N("hold", seconds);
             held = Get("hold").Length > 0;
             scrolling = Get("scroll");
@@ -217,6 +253,7 @@ namespace OpenUtau.App.Embedding {
                 xLeft = at.X, xRight = at.X + vm.Bounds.Width,
                 yHigh = at.Y, yLow = at.Y + vm.Bounds.Height,
                 playhead = hostSeconds,
+                hostInputSeconds = inputHostSeconds,
                 playheadX = playheadLine != null ? Canvas.GetLeft(playheadLine) : vm.PlayPosX,
                 modelPlayheadX = vm.PlayPosX,
                 expectedX = (axis.MsPosToNonExactTickPos(hostSeconds * 1000) - offset) * vm.TickWidth,
@@ -230,7 +267,7 @@ namespace OpenUtau.App.Embedding {
 
         public void End() {
             if (!active) return;
-            active = false;
+            Volatile.Write(ref active, false);
             roll.ViewModel.NotesViewModel.PropertyChanged -= ViewChanged;
             roll.ViewModel.NotesViewModel.SetHostPlayPos(null);
             playheadLine?.SetCurrentValue(Control.IsVisibleProperty, playheadWasVisible);
