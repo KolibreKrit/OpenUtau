@@ -14,6 +14,8 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Controls.Embedding;
 using Avalonia.Controls.Primitives;
 using Avalonia.Media;
+using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Platform;
 using Avalonia.Styling;
 using Avalonia.Threading;
@@ -232,6 +234,7 @@ namespace OpenUtau.App.Embedding {
                 var bar = trackBar = new TrackBar(ShowTrack);
                 DockPanel.SetDock(bar, Dock.Top);
                 editor = new DockPanel { Children = { bar, pianoRoll } };
+                BindEmptyProjectUndo(editor, pianoRoll);
                 // A menu or tooltip that is a window of its own opens away from what opened it, as far right and down
                 // as the piano roll is from the corner of the application's window. A tooltip takes the setting from
                 // the control that has it, not from its popup.
@@ -390,6 +393,26 @@ namespace OpenUtau.App.Embedding {
         [UnmanagedCallersOnly]
         public static int ReadImportedSingers(IntPtr callback, IntPtr context) => Guard("read imported singers", () =>
             SendText(callback, context, importedSingers));
+
+        // The embedded editor has no main window to receive Undo and Redo after its last part closes.
+        public static void BindEmptyProjectUndo(Control root, PianoRoll view) {
+            root.AddHandler(InputElement.KeyDownEvent, (_, args) => {
+                if (args.Handled || view.ViewModel.NotesViewModel.Part != null || DocManager.Inst.Project.parts.Count != 0) return;
+                if (TopLevel.GetTopLevel(root)?.FocusManager?.GetFocusedElement() is TextBox field
+                    && field.IsEnabled && field.IsEffectivelyVisible && field.IsFocused) return;
+                var command = OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
+                if (args.Key != Key.Z || (args.KeyModifiers != command && args.KeyModifiers != (command | KeyModifiers.Shift))) return;
+                if (args.KeyModifiers.HasFlag(KeyModifiers.Shift)) DocManager.Inst.Redo();
+                else DocManager.Inst.Undo();
+                var project = DocManager.Inst.Project;
+                var part = project.parts.OfType<UVoicePart>().FirstOrDefault();
+                if (part != null) {
+                    DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, project, part.position));
+                    view.AttachExpressions();
+                }
+                args.Handled = true;
+            }, RoutingStrategies.Bubble);
+        }
 
         [UnmanagedCallersOnly]
         public static int NewProject(IntPtr destination) => Guard("new project", () =>

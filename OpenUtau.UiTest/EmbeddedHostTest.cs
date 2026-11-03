@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
+using Avalonia.Interactivity;
 using Avalonia.Threading;
 using OpenUtau.App.Controls;
 using OpenUtau.App.Embedding;
@@ -259,6 +260,34 @@ namespace OpenUtau.UiTest {
                 double row = notesVm.TrackCount - 1 - note.tone;
                 Assert.InRange(row, notesVm.TrackOffset, notesVm.TrackOffset + notesVm.ViewportTracks - 1);
             }
+        }
+
+        [Fact]
+        public void RedoInTheEmptyEmbeddedEditorRestoresItsLastPart() {
+            var project = Core.Format.Ustx.Create();
+            var original = AddPart(project, 0, 0, 1);
+            WithPianoRoll(project, original, pianoRoll => {
+                var empty = Core.Format.Ustx.Create();
+                DocManager.Inst.ExecuteCmd(new LoadProjectNotification(empty));
+                var part = new UVoicePart { trackNo = 0, Duration = 1920 };
+                DocManager.Inst.StartUndoGroup("test");
+                DocManager.Inst.ExecuteCmd(new AddPartCommand(empty, part));
+                DocManager.Inst.EndUndoGroup();
+                DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, empty, 0));
+                DocManager.Inst.Undo();
+                HeadlessUi.Flush();
+                Assert.Empty(empty.parts);
+                Assert.Null(pianoRoll.ViewModel.NotesViewModel.Part);
+
+                EmbeddedHost.BindEmptyProjectUndo(pianoRoll, pianoRoll);
+                var command = OperatingSystem.IsMacOS() ? KeyModifiers.Meta : KeyModifiers.Control;
+                pianoRoll.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent,
+                    Key = Key.Z, KeyModifiers = command | KeyModifiers.Shift });
+                HeadlessUi.Flush();
+
+                Assert.Same(part, Assert.Single(empty.parts));
+                Assert.Same(part, pianoRoll.ViewModel.NotesViewModel.Part);
+            });
         }
 
         [Fact]
