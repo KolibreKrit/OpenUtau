@@ -664,6 +664,86 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        // Runs the test on the piano roll of Project's two tracks, named Lead and Harmony at 96 bpm, with a folder of
+        // its own.
+        static void WithTracks(Action<UProject, UVoicePart, string> test) {
+            var project = Project(out var first, out _);
+            project.tempos[0].bpm = 96;
+            project.tracks[0].TrackName = "Lead";
+            project.tracks[1].TrackName = "Harmony";
+            var folder = Path.Combine(Path.GetTempPath(), "OpenUtauEmbeddedTrackTest", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(folder);
+            WithPianoRoll(project, first, _ => {
+                try {
+                    test(project, first, folder);
+                } finally {
+                    Directory.Delete(folder, recursive: true);
+                }
+            });
+        }
+
+        static IEnumerable<(int position, int notes)> PartsOf(UProject project, int trackNo) =>
+            project.parts.OfType<UVoicePart>().Where(p => p.trackNo == trackNo)
+                .OrderBy(p => p.position).Select(p => (p.position, p.notes.Count));
+
+        [Fact]
+        public void AddedTracksFollowTheOthersAndOneUndoTakesThemAway() => WithTracks((project, _, folder) => {
+            var copy = Core.Format.Ustx.Create();
+            AddPart(copy, 0, 960, 3);
+            copy.AfterLoad();
+            copy.tracks[0].Singer = USinger.CreateMissing("test");
+            var source = Path.Combine(folder, "copy.ustx");
+            Assert.True(Core.Format.Ustx.Save(source, copy));
+
+            EmbeddedHost.AddTracks(source, "Lead 2");
+            Assert.Equal(new[] { "Lead", "Harmony", "Lead 2" }, project.tracks.Select(t => t.TrackName));
+            Assert.Equal(new[] { (960, 3) }, PartsOf(project, 2));
+            Assert.Equal(96, project.tempos[0].bpm);
+            WaitForPhonemes(project);
+
+            DocManager.Inst.Undo();
+            Assert.Equal(new[] { "Lead", "Harmony" }, project.tracks.Select(t => t.TrackName));
+            Assert.Empty(PartsOf(project, 2));
+            DocManager.Inst.Redo();
+            Assert.Equal(new[] { "Lead", "Harmony", "Lead 2" }, project.tracks.Select(t => t.TrackName));
+            Assert.Equal(new[] { (960, 3) }, PartsOf(project, 2));
+        });
+
+        [Fact]
+        public void ARemovedTrackIsSavedAloneAndAddsBackAsItWas() => WithTracks((project, first, folder) => {
+            var removed = Path.Combine(folder, "lead.ustx");
+            EmbeddedHost.RemoveNamedTrack("Lead", removed);
+            Assert.Equal(new[] { "Harmony" }, project.tracks.Select(t => t.TrackName));
+            Assert.Equal(new[] { (1920, 8) }, PartsOf(project, 0));
+            Assert.DoesNotContain(first, project.parts);
+
+            var alone = Core.Format.Ustx.Read(removed);
+            Assert.Equal(new[] { "Lead" }, alone.tracks.Select(t => t.TrackName));
+            Assert.Equal(new[] { (0, 4), (19200, 160) },
+                alone.voiceParts.OrderBy(p => p.position).Select(p => (p.position, p.notes.Count)));
+            Assert.All(alone.voiceParts, p => Assert.Equal(0, p.trackNo));
+            Assert.Equal(96, alone.tempos[0].bpm);
+
+            DocManager.Inst.Undo();
+            Assert.Equal(new[] { "Lead", "Harmony" }, project.tracks.Select(t => t.TrackName));
+            Assert.Equal(new[] { (0, 4), (19200, 160) }, PartsOf(project, 0));
+            Assert.Equal(new[] { (1920, 8) }, PartsOf(project, 1));
+
+            DocManager.Inst.Redo();
+            EmbeddedHost.AddTracks(removed, "Lead");
+            Assert.Equal(new[] { "Harmony", "Lead" }, project.tracks.Select(t => t.TrackName));
+            Assert.Equal(new[] { (0, 4), (19200, 160) }, PartsOf(project, 1));
+        });
+
+        [Fact]
+        public void RemovingATrackNoneIsNamedChangesNothing() => WithTracks((project, _, folder) => {
+            var removed = Path.Combine(folder, "nobody.ustx");
+            EmbeddedHost.RemoveNamedTrack("Nobody", removed);
+            Assert.False(File.Exists(removed));
+            Assert.Equal(new[] { "Lead", "Harmony" }, project.tracks.Select(t => t.TrackName));
+            Assert.Equal(new[] { (0, 4), (19200, 160) }, PartsOf(project, 0));
+        });
+
         // The projects OpenUtau opens, by file.
         sealed class Opened : ICmdSubscriber {
             public readonly List<string> files = new();
