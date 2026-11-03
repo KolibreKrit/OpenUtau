@@ -173,6 +173,10 @@ namespace OpenUtau.App.Embedding {
                 json.WriteEndArray();
                 json.WriteStartArray("parts");
                 foreach (var part in parts) {
+                    if (part.notes.Count == 0) {
+                        rendered.Remove(part);
+                        continue;
+                    }
                     var audio = DawAudio.ReadPart(project, part, planner);
                     bool outdated = false;
                     if (audio.State == DawAudio.PartState.Ready) {

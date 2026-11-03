@@ -508,6 +508,21 @@ namespace OpenUtau.UiTest {
         }
 
         [Fact]
+        public void AnEmptyVoicePartNeedsNoRender() {
+            var project = Core.Format.Ustx.Create();
+            var part = new UVoicePart { trackNo = 0, Duration = 1920 };
+            project.parts.Add(part);
+            project.AfterLoad();
+            Renderable(project);
+            WithPianoRoll(project, part, pianoRoll => {
+                var snapshot = Snapshot(project);
+                Assert.Equal(0, snapshot.GetProperty("rendering").GetInt32());
+                Assert.Equal(0, snapshot.GetProperty("failed").GetInt32());
+                Assert.Equal(0, snapshot.GetProperty("parts").GetArrayLength());
+            });
+        }
+
+        [Fact]
         public void TheMixSnapshotHasTheTracksTheSongAndThePartsStillRendering() {
             var project = Project(out var first, out var second);
             WithPianoRoll(project, first, pianoRoll => {
