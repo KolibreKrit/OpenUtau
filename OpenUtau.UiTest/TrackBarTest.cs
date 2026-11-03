@@ -114,6 +114,40 @@ namespace OpenUtau.UiTest {
         }
 
         [Fact]
+        public void AMissingSingersTabOpensItsSingerMenu() {
+            WithBar(Project(), (bar, _) => {
+                Click(TabButton(bar, "Harmony · No singer"));
+                Assert.Single(TopLevel.GetTopLevel(bar)!.GetVisualDescendants().OfType<SingerFlyout>());
+            });
+        }
+
+        [Fact]
+        public void AMenuWithoutInstalledSingersOffersInstallation() {
+            WithBar(Project(), (bar, _) => {
+                var manager = SingerManager.Inst;
+                var singers = manager.Singers.ToArray();
+                manager.Singers.Clear();
+                try {
+                    Click(Arrow(bar, "Harmony · No singer"));
+                    var window = TopLevel.GetTopLevel(bar)!;
+                    Assert.Contains(window.GetVisualDescendants().OfType<Button>(), button => button.Content as string == "Install singer…");
+                } finally {
+                    foreach (var singer in singers) manager.Singers[singer.Key] = singer.Value;
+                }
+            });
+        }
+
+        [Fact]
+        public void TheHostCanOpenATracksSingerMenu() {
+            WithBar(Project(), (bar, _) => {
+                Assert.False(bar.ShowSingerMenu(9));
+                Assert.True(bar.ShowSingerMenu(1));
+                HeadlessUi.Flush();
+                Assert.Single(TopLevel.GetTopLevel(bar)!.GetVisualDescendants().OfType<SingerFlyout>());
+            });
+        }
+
+        [Fact]
         public void EachTrackHasATabNamingItsSinger() {
             WithBar(Project(), (bar, _) => {
                 Assert.Equal(new[] { "Lead · Alto", "Harmony · No singer" }, bar.Tabs.Select(tab => tab.Text));

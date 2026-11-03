@@ -10,6 +10,7 @@ using Avalonia.Styling;
 using Avalonia.Threading;
 using OpenUtau.App.Controls;
 using OpenUtau.App.ViewModels;
+using OpenUtau.App.Views;
 using OpenUtau.Core;
 using OpenUtau.Core.Ustx;
 
@@ -25,6 +26,7 @@ namespace OpenUtau.App.Embedding {
         readonly StackPanel tabs = new() { Orientation = Orientation.Horizontal, Spacing = 2, Margin = new Thickness(4, 2) };
         // The part the piano roll shows, whose track's tab is the shown one.
         UPart? shownPart;
+        readonly Dictionary<int, Control> menuAnchors = new();
 
         /// <param name="showTrack">Shows the track of the given number in the piano roll.</param>
         public TrackBar(Action<int> showTrack) {
@@ -49,6 +51,13 @@ namespace OpenUtau.App.Embedding {
         /// <summary>The tabs, in the project's track order.</summary>
         public IReadOnlyList<TrackTab> Tabs { get; private set; } = Array.Empty<TrackTab>();
 
+        public bool ShowSingerMenu(int trackNo) {
+            var tab = Tabs.FirstOrDefault(tab => tab.TrackNo == trackNo);
+            if (tab == null || !menuAnchors.TryGetValue(trackNo, out var anchor)) return false;
+            ShowMenu(tab, anchor);
+            return true;
+        }
+
         public void OnNext(UCommand cmd, bool isUndo) {
             switch (cmd) {
                 case LoadPartNotification load:
@@ -62,11 +71,8 @@ namespace OpenUtau.App.Embedding {
                 default:
                     return;
             }
-            if (Dispatcher.UIThread.CheckAccess()) {
-                Refresh();
-            } else {
-                Dispatcher.UIThread.Post(Refresh);
-            }
+            // Rebuilding can close a menu and remove its subscriber while DocManager publishes the command.
+            Dispatcher.UIThread.Post(Refresh);
         }
 
         void Refresh() {
@@ -75,6 +81,7 @@ namespace OpenUtau.App.Embedding {
                 .Where(track => Sings(project, track))
                 .Select(track => new TrackTab(track, shownPart != null && shownPart.trackNo == track.TrackNo))
                 .ToArray();
+            menuAnchors.Clear();
             tabs.Children.Clear();
             foreach (var tab in Tabs) {
                 tabs.Children.Add(View(tab));
@@ -98,6 +105,7 @@ namespace OpenUtau.App.Embedding {
             name.Click += (_, args) => {
                 args.Handled = true;
                 showTrack(tab.TrackNo);
+                if (!tab.HasSinger) ShowMenu(tab, name);
             };
             var menu = new Button {
                 Content = "▾",
@@ -105,6 +113,7 @@ namespace OpenUtau.App.Embedding {
                 Focusable = false,
                 Padding = new Thickness(4, 3, 8, 3),
             };
+            menuAnchors[tab.TrackNo] = menu;
             ToolTip.SetTip(menu, "Choose the singer");
             menu.Click += (_, args) => {
                 args.Handled = true;
@@ -130,13 +139,20 @@ namespace OpenUtau.App.Embedding {
                 var header = tab.Menu();
                 var singers = new SingerFlyoutViewModel(() => header.Singer, header.SelectSingerCommand);
                 var content = new SingerFlyout { DataContext = singers };
-                var advanced = Advanced(header, tab);
+                Flyout? flyoutForInstall = null;
+                Control advanced = Advanced(header, tab);
+                if (SingerManager.Inst.Singers.Count == 0) {
+                    var install = new Button { Content = "Install singer…", Margin = new Thickness(0, 4, 0, 0) };
+                    install.Click += (_, _) => { flyoutForInstall?.Hide(); InstallSinger(); };
+                    advanced = new StackPanel { Children = { install, advanced } };
+                }
                 DockPanel.SetDock(advanced, Dock.Bottom);
                 var flyout = new Flyout {
                     Content = new DockPanel { Children = { advanced, content } },
                     Placement = PlacementMode.BottomEdgeAlignedLeft,
                     ShowMode = FlyoutShowMode.Standard,
                 };
+                flyoutForInstall = flyout;
                 flyout.FlyoutPresenterClasses.Add("singerFlyout");
                 singers.CloseRequested += flyout.Hide;
                 flyout.Opened += (_, _) => DocManager.Inst.AddSubscriber(singers);
@@ -144,6 +160,27 @@ namespace OpenUtau.App.Embedding {
                 content.FitToScreen(anchor);
                 flyout.ShowAt(anchor);
             } catch (Exception e) {
+                DocManager.Inst.ExecuteCmd(new ErrorMessageNotification(e));
+            }
+        }
+
+        static async void InstallSinger() {
+            var setup = new SingerSetupDialog { Title = "Install singer" };
+            try {
+                setup.Show(EmbeddedHost.DialogOwner());
+                var file = await FilePicker.OpenFileAboutSinger(setup, "menu.tools.singer.install", FilePicker.ArchiveFiles);
+                if (file == null) { setup.Close(); return; }
+                if (file.EndsWith(Core.Vogen.VogenSingerInstaller.FileExt)) {
+                    Core.Vogen.VogenSingerInstaller.Install(file);
+                    setup.Close();
+                } else if (file.EndsWith(PackageManager.OudepExt)) {
+                    await PackageManager.Inst.InstallFromFileAsync(file);
+                    setup.Close();
+                } else {
+                    setup.DataContext = new SingerSetupViewModel { ArchiveFilePath = file };
+                }
+            } catch (Exception e) {
+                setup.Close();
                 DocManager.Inst.ExecuteCmd(new ErrorMessageNotification(e));
             }
         }
