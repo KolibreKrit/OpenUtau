@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -395,22 +396,28 @@ namespace OpenUtau.App.Embedding {
         }
 
         /// <summary>Adds the tracks of a USTX, such as one <see cref="ImportProject"/> made, after the open project's
-        /// tracks, as one step OpenUtau's Undo takes back. Its first track takes the name given, so the application
-        /// can find it again. Parts keep their ticks, and the open project keeps its tempo and time signatures, so the
-        /// application adds only a project with the same tempo. Then, as opening a project does, offers to map each
-        /// added track's voice colors and imported vocal modes onto its singer's. Fails while no project is open or one
-        /// is still being read.</summary>
+        /// tracks, as one step OpenUtau's Undo takes back. Its first track takes the name given, or the name numbered
+        /// from 2 when a track has it. The function is then called once, on the main thread, before this returns, with
+        /// the context, an ID <see cref="RemoveAddedTrack"/> finds that track by after it is renamed or moved, its number
+        /// from 0, and its name in UTF-8 with its length in bytes, which lasts only for the call. Parts keep their ticks,
+        /// and the open project keeps its tempo and time signatures, so the application adds only a project with the
+        /// same tempo. Then, as opening a project does, offers to map each added track's voice colors and imported vocal
+        /// modes onto its singer's. Fails while no project is open or one is still being read.</summary>
         [UnmanagedCallersOnly]
-        public static int AddTrack(IntPtr source, IntPtr name) => Guard("add track", () => {
+        public static int AddTrackFrom(IntPtr source, IntPtr name, IntPtr function, IntPtr context) => Guard("add track", () => {
+            if (function == IntPtr.Zero) {
+                throw new ArgumentNullException(nameof(function));
+            }
             if (!Usable) {
                 throw new InvalidOperationException("No project is open to add tracks to");
             }
-            AddTracks(Utf8(source) ?? throw new ArgumentNullException(nameof(source)),
+            var added = AddTracks(Utf8(source) ?? throw new ArgumentNullException(nameof(source)),
                 Utf8(name) ?? throw new ArgumentNullException(nameof(name)));
+            Report(function, context, added, added.TrackNo);
         });
 
-        /// <summary>The managed part of <see cref="AddTrack"/>.</summary>
-        public static void AddTracks(string source, string name) {
+        /// <summary>The managed part of <see cref="AddTrackFrom"/>. Returns the first track added.</summary>
+        public static UTrack AddTracks(string source, string name) {
             var project = DocManager.Inst.Project;
             // As for Import, the tracks' singers may still be being searched for.
             Task.WhenAny(loading).Wait();
@@ -423,7 +430,7 @@ namespace OpenUtau.App.Embedding {
                 project.expressions.TryAdd(abbr, descriptor);
             }
             int first = project.tracks.Count;
-            loaded.tracks[0].TrackName = name;
+            loaded.tracks[0].TrackName = UnusedName(project, name);
             DocManager.Inst.StartUndoGroup("command.import.track");
             try {
                 for (int i = 0; i < loaded.tracks.Count; ++i) {
@@ -447,29 +454,74 @@ namespace OpenUtau.App.Embedding {
             for (int i = 0; i < loaded.tracks.Count; ++i) {
                 DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(first + i, true));
             }
-            Log.Information($"Embedded OpenUtau added {loaded.tracks.Count} tracks from {source} as {name}");
+            Log.Information($"Embedded OpenUtau added {loaded.tracks.Count} tracks from {source} as {loaded.tracks[0].TrackName}");
+            return loaded.tracks[0];
         }
 
-        /// <summary>Saves the last track with this name, with its voice parts, as a USTX of its own at the destination,
-        /// with the open project's tempo, time signatures and expressions, then removes it from the open project as one
-        /// step OpenUtau's Undo takes back. <see cref="AddTrack"/> adds it again from that file. The USTX appears whole or
-        /// not at all, replacing any file there. Does nothing when no track has the name.</summary>
+        // The name, or the name numbered from 2, that none of the project's tracks has.
+        static string UnusedName(UProject project, string name) {
+            bool Taken(string candidate) => project.tracks.Any(t => t.TrackName == candidate);
+            if (!Taken(name)) {
+                return name;
+            }
+            for (int number = 2; ; ++number) {
+                if (!Taken($"{name} {number}")) {
+                    return $"{name} {number}";
+                }
+            }
+        }
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        delegate void TrackFunction(IntPtr context, int id, int trackNo, IntPtr utf8, int length);
+
+        // The IDs given to tracks, which stay with a track through renames, moves and OpenUtau's Undo and Redo, but
+        // not into a project opened again from its file.
+        static readonly ConditionalWeakTable<UTrack, object> ids = new();
+        static int lastId;
+
+        /// <summary>The track's ID, given when first asked for.</summary>
+        public static int IdOf(UTrack track) => (int)ids.GetValue(track, _ => Interlocked.Increment(ref lastId));
+
+        /// <summary>The open project's track with the ID, or null.</summary>
+        public static UTrack? TrackWithId(int id) =>
+            DocManager.Inst.Project?.tracks.FirstOrDefault(t => ids.TryGetValue(t, out var given) && (int)given == id);
+
+        static void Report(IntPtr function, IntPtr context, UTrack track, int trackNo) {
+            var receive = Marshal.GetDelegateForFunctionPointer<TrackFunction>(function);
+            var name = Encoding.UTF8.GetBytes(track.TrackName + "\0");
+            var pinned = GCHandle.Alloc(name, GCHandleType.Pinned);
+            try {
+                receive(context, IdOf(track), trackNo, pinned.AddrOfPinnedObject(), name.Length - 1);
+            } finally {
+                pinned.Free();
+            }
+        }
+
+        /// <summary>Saves the track <see cref="AddTrackFrom"/> gave the ID, with its voice parts, as a USTX of its own
+        /// at the destination, with the open project's tempo, time signatures and expressions, then removes it from the
+        /// open project as one step OpenUtau's Undo takes back. <see cref="AddTrackFrom"/> adds it again from that file.
+        /// The USTX appears whole or not at all, replacing any file there. The function is then called as
+        /// <see cref="AddTrackFrom"/> calls it, with the number and name the track had. Does nothing, and calls nothing,
+        /// when the open project no longer has the track.</summary>
         [UnmanagedCallersOnly]
-        public static int RemoveTrack(IntPtr name, IntPtr destination) => Guard("remove track", () => {
+        public static int RemoveAddedTrack(int id, IntPtr destination, IntPtr function, IntPtr context) => Guard("remove track", () => {
+            if (function == IntPtr.Zero) {
+                throw new ArgumentNullException(nameof(function));
+            }
             if (!Usable) {
                 throw new InvalidOperationException("No project is open to remove a track from");
             }
-            RemoveNamedTrack(Utf8(name) ?? throw new ArgumentNullException(nameof(name)),
-                Utf8(destination) ?? throw new ArgumentNullException(nameof(destination)));
+            var path = Utf8(destination) ?? throw new ArgumentNullException(nameof(destination));
+            if (TrackWithId(id) is UTrack track) {
+                int trackNo = track.TrackNo;
+                SaveAndRemove(track, path);
+                Report(function, context, track, trackNo);
+            }
         });
 
-        /// <summary>The managed part of <see cref="RemoveTrack"/>.</summary>
-        public static void RemoveNamedTrack(string name, string destination) {
+        /// <summary>The managed part of <see cref="RemoveAddedTrack"/>, for a track of the open project.</summary>
+        public static void SaveAndRemove(UTrack track, string destination) {
             var project = DocManager.Inst.Project;
-            var track = project.tracks.LastOrDefault(t => t.TrackName == name);
-            if (track == null) {
-                return;
-            }
             // A copy of the whole project as it would be saved, less the other tracks and their parts.
             string whole;
             project.BeforeSave();
@@ -497,7 +549,7 @@ namespace OpenUtau.App.Embedding {
             } finally {
                 DocManager.Inst.EndUndoGroup();
             }
-            Log.Information($"Embedded OpenUtau removed track {name}, saved as {destination}");
+            Log.Information($"Embedded OpenUtau removed track {track.TrackName}, saved as {destination}");
         }
 
         /// <summary>Shows a track's first voice part in the piano roll.</summary>

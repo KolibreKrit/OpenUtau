@@ -695,7 +695,8 @@ namespace OpenUtau.UiTest {
             var source = Path.Combine(folder, "copy.ustx");
             Assert.True(Core.Format.Ustx.Save(source, copy));
 
-            EmbeddedHost.AddTracks(source, "Lead 2");
+            var added = EmbeddedHost.AddTracks(source, "Lead 2");
+            Assert.Same(project.tracks[2], added);
             Assert.Equal(new[] { "Lead", "Harmony", "Lead 2" }, project.tracks.Select(t => t.TrackName));
             Assert.Equal(new[] { (960, 3) }, PartsOf(project, 2));
             Assert.Equal(96, project.tempos[0].bpm);
@@ -750,7 +751,7 @@ namespace OpenUtau.UiTest {
         [Fact]
         public void ARemovedTrackIsSavedAloneAndAddsBackAsItWas() => WithTracks((project, first, folder) => {
             var removed = Path.Combine(folder, "lead.ustx");
-            EmbeddedHost.RemoveNamedTrack("Lead", removed);
+            EmbeddedHost.SaveAndRemove(project.tracks[0], removed);
             Assert.Equal(new[] { "Harmony" }, project.tracks.Select(t => t.TrackName));
             Assert.Equal(new[] { (1920, 8) }, PartsOf(project, 0));
             Assert.DoesNotContain(first, project.parts);
@@ -773,13 +774,42 @@ namespace OpenUtau.UiTest {
             Assert.Equal(new[] { (0, 4), (19200, 160) }, PartsOf(project, 1));
         });
 
+        // Saves a one-track copy of the project's second track as a USTX in the folder, and gives its path.
+        static string HarmonyCopy(string folder) {
+            var source = Path.Combine(folder, "harmony.ustx");
+            var copy = Core.Format.Ustx.Create();
+            AddPart(copy, 0, 960, 3);
+            copy.AfterLoad();
+            Assert.True(Core.Format.Ustx.Save(source, copy));
+            return source;
+        }
+
         [Fact]
-        public void RemovingATrackNoneIsNamedChangesNothing() => WithTracks((project, _, folder) => {
-            var removed = Path.Combine(folder, "nobody.ustx");
-            EmbeddedHost.RemoveNamedTrack("Nobody", removed);
-            Assert.False(File.Exists(removed));
-            Assert.Equal(new[] { "Lead", "Harmony" }, project.tracks.Select(t => t.TrackName));
-            Assert.Equal(new[] { (0, 4), (19200, 160) }, PartsOf(project, 0));
+        public void AnAddedTrackTakesTheNameNumberedWhenATrackHasIt() => WithTracks((project, _, folder) => {
+            var source = HarmonyCopy(folder);
+            Assert.Equal("Lead 2", EmbeddedHost.AddTracks(source, "Lead").TrackName);
+            Assert.Equal("Lead 3", EmbeddedHost.AddTracks(source, "Lead").TrackName);
+            Assert.Equal("Verse", EmbeddedHost.AddTracks(source, "Verse").TrackName);
+        });
+
+        // The application removes an added track by its ID, so a rename doesn't lose it, and a track that takes its
+        // old name isn't taken for it.
+        [Fact]
+        public void ATrackKeepsItsIdThroughARenameAndOpenUtausUndo() => WithTracks((project, _, folder) => {
+            var added = EmbeddedHost.AddTracks(HarmonyCopy(folder), "Lead 2");
+            int id = EmbeddedHost.IdOf(added);
+            DocManager.Inst.StartUndoGroup("test");
+            DocManager.Inst.ExecuteCmd(new RenameTrackCommand(project, added, "Verse"));
+            DocManager.Inst.ExecuteCmd(new RenameTrackCommand(project, project.tracks[1], "Lead 2"));
+            DocManager.Inst.EndUndoGroup();
+            Assert.Same(added, EmbeddedHost.TrackWithId(id));
+            Assert.NotEqual(id, EmbeddedHost.IdOf(project.tracks[1]));
+
+            EmbeddedHost.SaveAndRemove(added, Path.Combine(folder, "verse.ustx"));
+            Assert.Null(EmbeddedHost.TrackWithId(id));
+            DocManager.Inst.Undo();
+            Assert.Same(added, EmbeddedHost.TrackWithId(id));
+            Assert.Equal("Verse", added.TrackName);
         });
 
         // The projects OpenUtau opens, by file.
