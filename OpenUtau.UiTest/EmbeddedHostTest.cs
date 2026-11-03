@@ -302,25 +302,92 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        const string DarkHostTheme = """{"dark": true, "colors": {"BackgroundColor": "#1C1C1C", "AccentColor1": "#5A7A2B", "SystemAccentColor": "#B7DB78"}}""";
+        const string LightHostTheme = """{"dark": false, "colors": {"BackgroundColor": "#E6E4DC", "AccentColor1": "#36695D"}}""";
+
+        // A brush's colour in the application's resources, which the roll's controls and canvases draw with.
+        static Color Drawn(string brush) => ((ISolidColorBrush)Application.Current!.FindResource(brush)!).Color;
+
+        static void WithPreferredTheme(string name, Action test) {
+            var saved = OpenUtau.Core.Util.Preferences.Default.ThemeName;
+            var trackColor = OpenUtau.Core.Util.Preferences.Default.UseTrackColor;
+            try {
+                OpenUtau.Core.Util.Preferences.Default.ThemeName = name;
+                OpenUtau.Core.Util.Preferences.Default.UseTrackColor = false;
+                OpenUtau.App.App.SetTheme();
+                test();
+            } finally {
+                EmbeddedHost.UseTheme(null);
+                OpenUtau.Core.Util.Preferences.Default.ThemeName = saved;
+                OpenUtau.Core.Util.Preferences.Default.UseTrackColor = trackColor;
+                OpenUtau.App.App.SetTheme();
+            }
+        }
+
         [Fact]
-        public void ShowcaseUsesADarkRollAndRestoresTheEditingTheme() {
+        public void HostThemeColoursTheRollAndKeepsThePreferredTheme() {
             var project = Project(out var first, out _);
-            WithPianoRoll(project, first, roll => {
-                var saved = OpenUtau.Core.Util.Preferences.Default.ThemeName;
-                try {
-                    OpenUtau.Core.Util.Preferences.Default.ThemeName = "Light";
-                    OpenUtau.App.App.SetTheme();
-                    var stage = new EmbeddedShowcase(roll);
-                    stage.Begin(false);
-                    Assert.Equal(Avalonia.Styling.ThemeVariant.Dark, Avalonia.Application.Current!.RequestedThemeVariant);
-                    stage.End();
-                    Assert.Equal("Light", OpenUtau.Core.Util.Preferences.Default.ThemeName);
-                    Assert.Equal(Avalonia.Styling.ThemeVariant.Light, Avalonia.Application.Current.RequestedThemeVariant);
-                } finally {
-                    OpenUtau.Core.Util.Preferences.Default.ThemeName = saved;
-                    OpenUtau.App.App.SetTheme();
-                }
-            });
+            WithPianoRoll(project, first, roll => WithPreferredTheme("Light", () => {
+                EmbeddedHost.UseTheme(DarkHostTheme);
+                HeadlessUi.Flush();
+                Assert.Equal(Avalonia.Styling.ThemeVariant.Dark, Application.Current!.RequestedThemeVariant);
+                Assert.Equal(true, Application.Current.FindResource("IsDarkMode"));
+                Assert.Equal(Color.Parse("#1C1C1C"), Drawn("SystemControlBackgroundAltHighBrush"));
+                Assert.Equal(Color.Parse("#5A7A2B"), Drawn("AccentBrush1"));
+                Assert.Equal(Color.Parse("#B7DB78"), Drawn("SelectedTrackAccentBrush"));
+                var hostAccent = Application.Current.FindResource("SelectedTrackAccentBrush");
+                // A colour the host leaves out is the Dark theme's, not the Light theme the preferences name.
+                Assert.Equal(Color.Parse("#CDCAD4"), Drawn("SystemControlForegroundBaseHighBrush"));
+                Assert.Equal("Light", OpenUtau.Core.Util.Preferences.Default.ThemeName);
+
+                // OpenUtau sets its theme again itself, as after installing a package.
+                OpenUtau.App.App.SetTheme();
+                HeadlessUi.Flush();
+                Assert.Equal(Color.Parse("#5A7A2B"), Drawn("AccentBrush1"));
+
+                EmbeddedHost.UseTheme(null);
+                HeadlessUi.Flush();
+                Assert.Equal(Avalonia.Styling.ThemeVariant.Light, Application.Current.RequestedThemeVariant);
+                Assert.Equal(Color.Parse("#FFFFFF"), Drawn("SystemControlBackgroundAltHighBrush"));
+                // OpenUtau's own track colours belong to the UI thread of the test that first used them, so this
+                // compares the brush rather than reading its colour.
+                Assert.NotSame(hostAccent, Application.Current.FindResource("SelectedTrackAccentBrush"));
+            }));
+        }
+
+        [Fact]
+        public void HostThemeRefusesAColourOpenUtauHasNot() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, roll => WithPreferredTheme("Light", () => {
+                EmbeddedHost.UseTheme(LightHostTheme);
+                HeadlessUi.Flush();
+                Assert.Equal(Color.Parse("#36695D"), Drawn("AccentBrush1"));
+                Assert.Throws<ArgumentException>(() => EmbeddedHost.UseTheme(
+                    """{"dark": true, "colors": {"BackgroundColor": "#000000", "NoSuchColor": "#FF0000"}}"""));
+                Assert.Throws<ArgumentException>(() => EmbeddedHost.UseTheme(
+                    """{"dark": true, "colors": {"BackgroundColor": "not a colour"}}"""));
+                HeadlessUi.Flush();
+                Assert.Equal(Avalonia.Styling.ThemeVariant.Light, Application.Current!.RequestedThemeVariant);
+                Assert.Equal(Color.Parse("#E6E4DC"), Drawn("SystemControlBackgroundAltHighBrush"));
+            }));
+        }
+
+        [Fact]
+        public void ShowcaseKeepsTheHostsColours() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, roll => WithPreferredTheme("Light", () => {
+                EmbeddedHost.UseTheme(DarkHostTheme);
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(false);
+                HeadlessUi.Flush();
+                Assert.Equal(Color.Parse("#1C1C1C"), Drawn("SystemControlBackgroundAltHighBrush"));
+                // The standalone OpenUtau shares these preferences, so the Stage leaves their theme alone.
+                Assert.Equal("Light", OpenUtau.Core.Util.Preferences.Default.ThemeName);
+                stage.End();
+                HeadlessUi.Flush();
+                Assert.Equal(Color.Parse("#1C1C1C"), Drawn("SystemControlBackgroundAltHighBrush"));
+                Assert.Equal("Light", OpenUtau.Core.Util.Preferences.Default.ThemeName);
+            }));
         }
 
         [Fact]

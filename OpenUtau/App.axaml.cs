@@ -153,6 +153,16 @@ namespace OpenUtau.App {
             SetTheme();
         }
 
+        /// <summary>The hosting application's colours, which SetTheme applies in place of the theme the preferences
+        /// name, or null for that theme.</summary>
+        public static Embedding.HostTheme? HostTheme { get; set; }
+
+        /// <summary>The names of the colours OpenUtau's themes set, which a host theme may give.</summary>
+        public static IReadOnlyCollection<string> ThemeColorNames() {
+            var dark = (IResourceDictionary)(Current ?? throw new InvalidOperationException("OpenUtau hasn't started")).Resources["themes-dark"]!;
+            return dark.Where(item => item.Value is Avalonia.Media.Color).Select(item => (string)item.Key).ToHashSet();
+        }
+
         public static void SetTheme() {
             if (Current == null) {
                 return;
@@ -160,6 +170,15 @@ namespace OpenUtau.App {
             var light = (IResourceDictionary) Current.Resources["themes-light"]!;
             var dark = (IResourceDictionary) Current.Resources["themes-dark"]!;
             var custom = (IResourceDictionary) Current.Resources["themes-custom"]!;
+            if (HostTheme is { } host) {
+                ApplyTheme(host.Dark ? dark : light);
+                foreach (var (name, color) in host.Colors) {
+                    Current.Resources[name] = color;
+                }
+                Current.RequestedThemeVariant = host.Dark ? ThemeVariant.Dark : ThemeVariant.Light;
+                ThemeManager.LoadTheme();
+                return;
+            }
             switch (Core.Util.Preferences.Default.ThemeName) { 
                 case "Light":
                     ApplyTheme(light);
