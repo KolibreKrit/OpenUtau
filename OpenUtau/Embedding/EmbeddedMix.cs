@@ -163,7 +163,7 @@ namespace OpenUtau.App.Embedding {
                 foreach (var track in project.tracks) {
                     json.WriteStartObject();
                     json.WriteString("name", track.TrackName);
-                    json.WriteString("singer", track.Singer?.Name ?? string.Empty);
+                    json.WriteString("singer", track.Singer?.Found == true ? track.Singer.Name : string.Empty);
                     json.WriteString("engine", track.RendererSettings.renderer ?? string.Empty);
                     json.WriteNumber("volume", track.Volume);
                     json.WriteNumber("pan", track.Pan);

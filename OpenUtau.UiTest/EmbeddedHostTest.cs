@@ -488,7 +488,7 @@ namespace OpenUtau.UiTest {
                 using var json = JsonDocument.Parse(text);
                 var root = json.RootElement;
                 Assert.Equal(2, root.GetProperty("tracks").GetArrayLength());
-                Assert.Equal("test", root.GetProperty("tracks")[0].GetProperty("singer").GetString());
+                Assert.Equal("", root.GetProperty("tracks")[0].GetProperty("singer").GetString());
                 // The edited part waits for its phonemes, and a part is listed only once it has audio.
                 Assert.InRange(rendering, 1, 3);
                 Assert.Equal(rendering, root.GetProperty("rendering").GetInt32());
@@ -527,6 +527,8 @@ namespace OpenUtau.UiTest {
                 using var missing = JsonDocument.Parse(EmbeddedMix.Snapshot(project, true).json);
                 Assert.Equal("missing-singer",
                     missing.RootElement.GetProperty("song").GetProperty("tracks")[1].GetProperty("singer").GetString());
+                Assert.Equal("", missing.RootElement.GetProperty("tracks")[1].GetProperty("singer").GetString());
+                Assert.Equal("test", named.RootElement.GetProperty("tracks")[1].GetProperty("singer").GetString());
                 Assert.Equal(2, EmbeddedMix.ReadAudio("1", out _));
             });
         }

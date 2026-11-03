@@ -43,6 +43,7 @@ namespace OpenUtau.App.Embedding {
         static PianoRoll? pianoRoll;
         // The piano roll with the track bar above it.
         static DockPanel? editor;
+        static TrackBar? trackBar;
         static Window? dialogOwner;
         static bool ready;
         internal static bool Ready => ready;
@@ -228,7 +229,7 @@ namespace OpenUtau.App.Embedding {
                 pianoRoll.ViewModel.PlaybackViewModel = new PlaybackViewModel();
                 DocManager.Inst.AddSubscriber(new RenderWhenPhonemized());
                 DocManager.Inst.AddSubscriber(new RemapVoiceColors());
-                var bar = new TrackBar(ShowTrack);
+                var bar = trackBar = new TrackBar(ShowTrack);
                 DockPanel.SetDock(bar, Dock.Top);
                 editor = new DockPanel { Children = { bar, pianoRoll } };
                 // A menu or tooltip that is a window of its own opens away from what opened it, as far right and down
@@ -575,6 +576,15 @@ namespace OpenUtau.App.Embedding {
             }
             Log.Information($"Embedded OpenUtau removed track {track.TrackName}, saved as {destination}");
         }
+
+        [UnmanagedCallersOnly]
+        public static int ShowSingerMenu(int trackNo) => Guard("show singer menu", () => {
+            ShowWhenUsable(() => {
+                ShowTrack(trackNo);
+                Dispatcher.UIThread.Post(() => trackBar?.ShowSingerMenu(trackNo), DispatcherPriority.Background);
+                return true;
+            });
+        });
 
         /// <summary>Shows a track's first voice part in the piano roll.</summary>
         [UnmanagedCallersOnly]
