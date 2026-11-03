@@ -143,6 +143,41 @@ namespace OpenUtau.UiTest {
         });
 
         [Fact]
+        public void ShowcaseUsesADarkRollAndRestoresTheEditingTheme() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, roll => {
+                var saved = OpenUtau.Core.Util.Preferences.Default.ThemeName;
+                try {
+                    OpenUtau.Core.Util.Preferences.Default.ThemeName = "Light";
+                    OpenUtau.App.App.SetTheme();
+                    var stage = new EmbeddedShowcase(roll);
+                    stage.Begin(false);
+                    Assert.Equal(Avalonia.Styling.ThemeVariant.Dark, Avalonia.Application.Current!.RequestedThemeVariant);
+                    stage.End();
+                    Assert.Equal("Light", OpenUtau.Core.Util.Preferences.Default.ThemeName);
+                    Assert.Equal(Avalonia.Styling.ThemeVariant.Light, Avalonia.Application.Current.RequestedThemeVariant);
+                } finally {
+                    OpenUtau.Core.Util.Preferences.Default.ThemeName = saved;
+                    OpenUtau.App.App.SetTheme();
+                }
+            });
+        }
+
+        [Fact]
+        public void ShowcaseHidesEditingTipsAndRestoresTheirChoice() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, roll => {
+                var vm = roll.ViewModel.NotesViewModel;
+                vm.ShowTips = true;
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(false);
+                Assert.False(vm.ShowTips);
+                stage.End();
+                Assert.True(vm.ShowTips);
+            });
+        }
+
+        [Fact]
         public void ShowcaseTurnsToTheNextPhraseBeforeItsFirstWord() {
             var project = Project(out var first, out _);
             WithPianoRoll(project, first, roll => {

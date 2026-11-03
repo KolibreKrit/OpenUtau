@@ -9,13 +9,15 @@ using Avalonia.VisualTree;
 using OpenUtau.App.Controls;
 using OpenUtau.Core;
 using OpenUtau.Core.Ustx;
+using OpenUtau.Core.Util;
 
 namespace OpenUtau.App.Embedding {
     public sealed class EmbeddedShowcase {
         readonly PianoRoll roll;
         UVoicePart? part;
         double tickWidth, tickOffset, trackHeight, trackOffset;
-        bool active;
+        bool active, showTips;
+        string theme = "Light";
         readonly List<Action> restoreChrome = new();
 
         public EmbeddedShowcase(PianoRoll roll) { this.roll = roll; }
@@ -24,10 +26,15 @@ namespace OpenUtau.App.Embedding {
             if (active) return;
             var vm = roll.ViewModel.NotesViewModel;
             part = vm.Part;
+            showTips = vm.ShowTips;
+            vm.ShowTips = false;
             tickWidth = vm.TickWidth;
             tickOffset = vm.TickOffset;
             trackHeight = vm.TrackHeight;
             trackOffset = vm.TrackOffset;
+            theme = Preferences.Default.ThemeName;
+            Preferences.Default.ThemeName = "Dark";
+            App.SetTheme();
             active = true;
             frame = null;
             if (hideChrome) {
@@ -189,6 +196,9 @@ namespace OpenUtau.App.Embedding {
                 DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, DocManager.Inst.Project, part.position));
                 roll.AttachExpressions();
             }
+            Preferences.Default.ThemeName = theme;
+            App.SetTheme();
+            vm.ShowTips = showTips;
             vm.TickWidth = tickWidth;
             vm.TrackHeight = trackHeight;
             vm.TickOffset = tickOffset;
