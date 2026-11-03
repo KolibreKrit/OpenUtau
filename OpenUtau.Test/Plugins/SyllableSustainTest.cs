@@ -71,5 +71,53 @@ namespace OpenUtau.Plugins {
             var result = phonemizer.Process(new[] { note }, null, next, null, next, null).phonemes;
             Assert.Equal(aliases, System.Linq.Enumerable.Select(result, p => p.phoneme));
         }
+        sealed class AlternatePhonemizer : ArpasingPlusPhonemizer {
+            protected override string YamlFileName => null;
+            public AlternatePhonemizer(bool sustain) {
+                vowels = new[] { "ah", "iy", "ih" };
+                consonants = System.Array.Empty<string>();
+                if (sustain) vowelSustains["ah"] = ("iy -", 0.6);
+            }
+            protected override string[] GetSymbols(Note note) => new[] { note.lyric };
+            protected override List<string> ProcessSyllable(Syllable syllable) =>
+                syllable.v == "ah" ? new() { "ah" } : new() { "iy", "ih" };
+            protected override List<string> ProcessEnding(Ending ending) => new();
+        }
+
+        [Fact]
+        public void CheckingASustainDoesNotChangeTheNextWordsSampleSelection() {
+            System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+            var directory = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!, "Files", "en_arpa");
+            VoicebankLoader.IsTest = true;
+            var bank = new Voicebank { File = Path.Combine(directory, "character.txt"), BasePath = directory };
+            VoicebankLoader.LoadVoicebank(bank);
+            using var singer = new ClassicSinger(bank);
+            singer.EnsureLoaded();
+            var project = new UProject();
+            project.timeAxis.BuildSegments(project);
+            var first = new Phonemizer.Note { lyric = "ah", position = 0, duration = 480, tone = 60 };
+            var next = new Phonemizer.Note { lyric = "iy", position = 480, duration = 480, tone = 60 };
+            var part = new UVoicePart { trackNo = 0 };
+            foreach (var input in new[] { first, next }) {
+                var note = UNote.Create();
+                note.position = input.position;
+                note.duration = input.duration;
+                note.lyric = input.lyric;
+                note.tone = input.tone;
+                part.notes.Add(note);
+            }
+            project.parts.Add(part);
+            string[] Following(bool sustain) {
+                var phonemizer = new AlternatePhonemizer(sustain);
+                phonemizer.SetSinger(singer);
+                phonemizer.SetTiming(project.timeAxis);
+                phonemizer.SetUp(new[] { new[] { first }, new[] { next } }, project, project.tracks[0]);
+                var start = phonemizer.Process(new[] { first }, null, next, null, next, null).phonemes;
+                Assert.Equal(sustain ? 2 : 1, start.Length);
+                return System.Linq.Enumerable.ToArray(System.Linq.Enumerable.Select(
+                    phonemizer.Process(new[] { next }, first, null, first, null, new[] { first }).phonemes, p => p.phoneme));
+            }
+            Assert.Equal(Following(false), Following(true));
+        }
     }
 }

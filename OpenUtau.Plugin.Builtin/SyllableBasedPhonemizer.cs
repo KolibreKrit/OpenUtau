@@ -383,8 +383,7 @@ namespace OpenUtau.Plugin.Builtin {
             if (previousHasSustain && nextNeighbour.HasValue) {
                 // The next word owns its leading consonants, which can start inside this note.
                 // Look ahead without sustains so this check cannot recurse into later words.
-                var following = Process(new[] { nextNeighbour.Value }, notes[0], null,
-                    notes.Last(), null, notes, false).phonemes;
+                var following = PreviewFollowingNote(nextNeighbour.Value, notes);
                 if (following.Length > 0 && phonemes.Last().position >=
                     nextNeighbour.Value.position - notes[0].position + following[0].position) {
                     phonemes.RemoveAt(phonemes.Count - 1);
@@ -402,6 +401,18 @@ namespace OpenUtau.Plugin.Builtin {
             return new Result() {
                 phonemes = finalPhonemes
             };
+        }
+
+        protected virtual Phoneme[] PreviewFollowingNote(Note next, Note[] previous) {
+            var savedGlides = runtimeGlides;
+            var savedError = error;
+            runtimeGlides = new HashSet<string>(StringComparer.Ordinal);
+            try {
+                return Process(new[] { next }, previous[0], null, previous.Last(), null, previous, false).phonemes;
+            } finally {
+                runtimeGlides = savedGlides;
+                error = savedError;
+            }
         }
 
         protected virtual Phoneme[] AssignAllAffixes(List<Phoneme> phonemes, Note[] notes, Note[] prevs, List<PhonemeAttributes> dynamicAttributes = null) {
