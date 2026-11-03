@@ -13,13 +13,33 @@ using Xunit;
 namespace OpenUtau.Test.App {
     [Collection(RenderSingletonCollection.Name)]
     public class ImportSingersTest {
-        sealed class Singer : USinger {
+        class Singer : USinger {
             public Singer() { found = true; loaded = true; }
             public override string Id => "import-choice-test";
             public override string Name => "Chosen singer";
             public override USingerType SingerType => USingerType.Classic;
             public override IList<USubbank> Subbanks { get; } = new List<USubbank>();
             public override string DefaultPhonemizer => typeof(ArpasingPhonemizer).FullName;
+        }
+
+        sealed class SingerWithoutPhonemizer : Singer {
+            public override string DefaultPhonemizer => "";
+        }
+
+        [Fact]
+        public void AChosenSingerWithoutAPhonemizerDoesNotInheritAnotherSingers() {
+            var singer = new SingerWithoutPhonemizer();
+            SingerManager.Inst.Singers.Add(singer.Id, singer);
+            try {
+                var project = new UProject();
+                project.tracks[0].Phonemizer = PhonemizerFactory.Get(typeof(ArpasingPhonemizer)).Create();
+                ImportSingers.Select(project, JsonSerializer.Serialize(new {
+                    tracks = new[] { new { svcoverSinger = new { id = singer.Id, phonemizer = "" } } }
+                }));
+                Assert.IsType<DefaultPhonemizer>(project.tracks[0].Phonemizer);
+            } finally {
+                SingerManager.Inst.Singers.Remove(singer.Id);
+            }
         }
 
         [Fact]

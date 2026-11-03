@@ -41,7 +41,7 @@ namespace OpenUtau.App.Embedding {
                     : PhonemizerFactory.Get(phonemizerId)
                         ?? throw new InvalidOperationException($"Phonemizer is no longer installed: {phonemizerId}");
                 track.Singer = singer;
-                if (factory != null) track.Phonemizer = factory.Create();
+                track.Phonemizer = (factory ?? PhonemizerFactory.Get(typeof(DefaultPhonemizer))).Create();
                 track.RendererSettings.Renderer = Core.Render.Renderers.CreateRenderer(Core.Render.Renderers.GetDefaultRenderer(singer.SingerType));
             }
         }
