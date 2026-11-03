@@ -143,6 +143,20 @@ namespace OpenUtau.UiTest {
         });
 
         [Fact]
+        public void ShowcaseShowsThePlayheadWhileTheHostPlays() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, roll => {
+                var line = roll.FindControl<Control>("PlayPosLine")!;
+                Assert.False(line.IsVisible);
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(false);
+                Assert.True(line.IsVisible);
+                stage.End();
+                Assert.False(line.IsVisible);
+            });
+        }
+
+        [Fact]
         public void ShowcaseUsesADarkRollAndRestoresTheEditingTheme() {
             var project = Project(out var first, out _);
             WithPianoRoll(project, first, roll => {
@@ -218,12 +232,18 @@ namespace OpenUtau.UiTest {
         public void ShowcaseHidesChromeAndRestoresItsLayout() {
             var project = Project(out var first, out _);
             WithPianoRoll(project, first, roll => {
+                var vm = roll.ViewModel.NotesViewModel;
+                vm.ShowPhoneme = vm.ShowWaveform = true;
                 var before = roll.ViewModel.NotesViewModel.Bounds;
                 var stage = new EmbeddedShowcase(roll);
                 stage.Begin(true);
+                Assert.False(vm.ShowPhoneme);
+                Assert.False(vm.ShowWaveform);
                 HeadlessUi.Flush();
                 Assert.True(roll.ViewModel.NotesViewModel.Bounds.Height > before.Height + 100);
                 stage.End();
+                Assert.True(vm.ShowPhoneme);
+                Assert.True(vm.ShowWaveform);
                 HeadlessUi.Flush();
                 Assert.Equal(before, roll.ViewModel.NotesViewModel.Bounds);
             });

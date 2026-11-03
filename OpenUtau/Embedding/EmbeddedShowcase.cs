@@ -16,7 +16,8 @@ namespace OpenUtau.App.Embedding {
         readonly PianoRoll roll;
         UVoicePart? part;
         double tickWidth, tickOffset, trackHeight, trackOffset;
-        bool active, showTips;
+        bool active, showTips, showPhoneme, showWaveform, playheadWasVisible;
+        Control? playheadLine;
         string theme = "Light";
         readonly List<Action> restoreChrome = new();
 
@@ -36,8 +37,14 @@ namespace OpenUtau.App.Embedding {
             Preferences.Default.ThemeName = "Dark";
             App.SetTheme();
             active = true;
+            playheadLine = roll.FindControl<Control>("PlayPosLine");
+            playheadWasVisible = playheadLine?.IsVisible ?? false;
+            playheadLine?.SetCurrentValue(Control.IsVisibleProperty, true);
             frame = null;
+            showPhoneme = vm.ShowPhoneme;
+            showWaveform = vm.ShowWaveform;
             if (hideChrome) {
+                vm.ShowPhoneme = vm.ShowWaveform = false;
                 var grid = roll.GetVisualDescendants().OfType<Grid>().First();
                 for (int i = 0; i < grid.RowDefinitions.Count; ++i) {
                     if (i == 2 || i == 3) continue;
@@ -126,6 +133,7 @@ namespace OpenUtau.App.Embedding {
             EmbeddedHost.ShowPartIn(roll, track - 1, tick);
             var vm = roll.ViewModel.NotesViewModel;
             if (vm.Part == null || vm.Bounds.Width <= 0) return;
+            playheadLine?.SetCurrentValue(Control.IsVisibleProperty, true);
             double pixels = vm.Bounds.Width * N("shown", 1);
             double width = Math.Max(1.2, pixels / 320), most = Math.Max(1.2, pixels / 240);
             double left, right;
@@ -189,6 +197,7 @@ namespace OpenUtau.App.Embedding {
         public void End() {
             if (!active) return;
             active = false;
+            playheadLine?.SetCurrentValue(Control.IsVisibleProperty, playheadWasVisible);
             foreach (var restore in restoreChrome) restore();
             restoreChrome.Clear();
             var vm = roll.ViewModel.NotesViewModel;
@@ -199,6 +208,8 @@ namespace OpenUtau.App.Embedding {
             Preferences.Default.ThemeName = theme;
             App.SetTheme();
             vm.ShowTips = showTips;
+            vm.ShowPhoneme = showPhoneme;
+            vm.ShowWaveform = showWaveform;
             vm.TickWidth = tickWidth;
             vm.TrackHeight = trackHeight;
             vm.TickOffset = tickOffset;
