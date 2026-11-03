@@ -70,7 +70,7 @@ namespace OpenUtau.App.Embedding {
         }
 
         record Phrase(double On, double Off);
-        record Frame(double Left, double Right, double Due, double? Centre);
+        record Frame(double Left, double Right, double? Centre, double? PhraseOn);
         Frame? frame;
         int frameTrack = -1;
         string frameLines = "";
@@ -146,16 +146,18 @@ namespace OpenUtau.App.Embedding {
                 var next = phrases.FirstOrDefault(p => p.Off + 0.1 > seconds);
                 bool inside = frame != null && seconds >= frame.Left && seconds < frame.Right - 0.15;
                 if (frame == null || !inside || (next != null && seconds >= next.On - 0.45
-                        && (next.On < frame.Left || next.Off + 0.2 > frame.Right))) {
+                        && frame.PhraseOn != next.On)) {
                     double due = frame != null && seconds >= frame.Right - 0.15 ? frame.Right - 0.15 : seconds;
                     left = due - 0.1;
                     right = left + width;
+                    double? phraseOn = null;
                     if (next != null && next.On - due <= 2 && (due >= next.On - 0.45 || next.Off + 0.2 - left <= most)) {
+                        phraseOn = next.On;
                         left = Math.Min(next.On - 0.45, due - 0.1);
                         right = left + Math.Min(most, Math.Max(width, next.Off + 0.2 - left));
                     }
                     var after = phrases.FirstOrDefault(p => p.On > (next?.On ?? seconds));
-                    frame = new Frame(left, right, due, Centre(track, left, Math.Min(right - 0.15, after?.On - 0.45 ?? right)));
+                    frame = new Frame(left, right, Centre(track, left, Math.Min(right - 0.15, after?.On - 0.45 ?? right)), phraseOn);
                 }
                 left = frame.Left; right = frame.Right; centre = frame.Centre;
             } else {

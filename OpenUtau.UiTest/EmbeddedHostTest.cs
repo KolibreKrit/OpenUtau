@@ -195,6 +195,9 @@ namespace OpenUtau.UiTest {
         public void ShowcaseTurnsToTheNextPhraseBeforeItsFirstWord() {
             var project = Project(out var first, out _);
             WithPianoRoll(project, first, roll => {
+                roll.ViewModel.NotesViewModel.ShowNoteParams = false;
+                HeadlessUi.Flush();
+                Assert.True(roll.ViewModel.NotesViewModel.Bounds.Width > 900);
                 var stage = new EmbeddedShowcase(roll);
                 stage.Begin(false);
                 const string plan = "steer=1\tscroll=phrases\tpitch=1\tshown=1\tstill=1\tswitches=0:1\tlines=1 0:0.5,1 1.5:2";
