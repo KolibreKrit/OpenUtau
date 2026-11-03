@@ -20,6 +20,8 @@ namespace OpenUtau.App.Embedding {
     public sealed class EmbeddedShowcase {
         readonly PianoRoll roll;
         readonly NotesCanvas canvas;
+        record PartSpan(UVoicePart Part, int First, int End);
+        readonly List<PartSpan> partSpans = new();
         Control? frameOrigin;
         double drawnPlayheadX;
         UVoicePart? part;
@@ -79,6 +81,10 @@ namespace OpenUtau.App.Embedding {
             if (active) return;
             var vm = roll.ViewModel.NotesViewModel;
             part = vm.Part;
+            partSpans.Clear();
+            foreach (var voice in DocManager.Inst.Project.parts.OfType<UVoicePart>().Where(p => p.notes.Count > 0))
+                partSpans.Add(new PartSpan(voice, voice.position + voice.notes.Min(n => n.position),
+                    voice.position + voice.notes.Max(n => n.End)));
             showTips = vm.ShowTips;
             vm.ShowTips = false;
             tickWidth = vm.TickWidth;
@@ -204,7 +210,10 @@ namespace OpenUtau.App.Embedding {
             int tick = axis.MsPosToTickPos(seconds * 1000);
             var vm = roll.ViewModel.NotesViewModel;
             vm.BeginHostFrame(axis.MsPosToNonExactTickPos(seconds * 1000));
-            EmbeddedHost.ShowPartIn(roll, track - 1, tick, false);
+            var spans = partSpans.Where(p => p.Part.trackNo == track - 1).OrderBy(p => p.First).ToList();
+            var shownPart = spans.FirstOrDefault(p => p.First <= tick && tick < p.End)
+                ?? spans.FirstOrDefault(p => p.First > tick) ?? spans.LastOrDefault();
+            EmbeddedHost.ShowPartIn(roll, shownPart?.Part, tick, false);
             if (vm.Part == null || vm.Bounds.Width <= 0) { vm.EndHostFrame(); return; }
             double pixels = vm.Bounds.Width * N("shown", 1);
             double width = Math.Max(1.2, pixels / 320), most = Math.Max(1.2, pixels / 240);

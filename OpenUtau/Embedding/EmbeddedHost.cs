@@ -1007,7 +1007,11 @@ namespace OpenUtau.App.Embedding {
         /// <summary>The piano roll part of <see cref="ShowTrackAt"/>. False if the track has no voice part.</summary>
         public static bool ShowPartIn(PianoRoll pianoRoll, int trackNo, int tick, bool frameView = true) {
             var project = DocManager.Inst.Project;
-            var part = EmbeddedNotes.PartAt(project, trackNo, tick);
+            return ShowPartIn(pianoRoll, EmbeddedNotes.PartAt(project, trackNo, tick), tick, frameView);
+        }
+
+        internal static bool ShowPartIn(PianoRoll pianoRoll, UVoicePart? part, int tick, bool frameView) {
+            var project = DocManager.Inst.Project;
             if (part == null) {
                 return false;
             }

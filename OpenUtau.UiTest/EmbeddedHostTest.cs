@@ -183,7 +183,7 @@ namespace OpenUtau.UiTest {
                 Assert.Equal(left, vm.TickOffset);
                 Assert.Empty(stage.RenderedFrame);
                 HeadlessUi.Flush();
-                Assert.Equal(project.timeAxis.MsPosToNonExactTickPos(600), vm.TickOffset, 6);
+                Assert.Equal(project.timeAxis.MsPosToNonExactTickPos(600), vm.Part!.position + vm.TickOffset, 6);
                 stage.RequestFrame(plan, 4, roll);
                 stage.End();
                 double restored = vm.TickOffset;
@@ -355,6 +355,24 @@ namespace OpenUtau.UiTest {
                 stage.Update(plan, 1.1);
                 Assert.True(vm.TickOffset > left + 400);
                 stage.End();
+            });
+        }
+
+        [Theory]
+        [InlineData("smooth")]
+        [InlineData("phrases")]
+        public void ShowcaseShowsTheUpcomingPartDuringTheGap(string scrolling) {
+            var project = Core.Format.Ustx.Create();
+            var first = AddPart(project, 0, 0, 2);
+            var next = AddPart(project, 0, 1920, 2);
+            project.AfterLoad();
+            WithPianoRoll(project, first, roll => {
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(true);
+                stage.Update($"steer=1\tscroll={scrolling}\tbar=2\tswitches=0:1\tlines=1 0:0.5 0.5:1,1 2:2.5 2.5:3", 1.6);
+                Assert.Same(next, roll.ViewModel.NotesViewModel.Part);
+                stage.End();
+                Assert.Same(first, roll.ViewModel.NotesViewModel.Part);
             });
         }
 
