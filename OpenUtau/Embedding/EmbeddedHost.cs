@@ -397,8 +397,9 @@ namespace OpenUtau.App.Embedding {
         /// <summary>Adds the tracks of a USTX, such as one <see cref="ImportProject"/> made, after the open project's
         /// tracks, as one step OpenUtau's Undo takes back. Its first track takes the name given, so the application
         /// can find it again. Parts keep their ticks, and the open project keeps its tempo and time signatures, so the
-        /// application adds only a project with the same tempo. Fails while no project is open or one is still being
-        /// read.</summary>
+        /// application adds only a project with the same tempo. Then, as opening a project does, offers to map each
+        /// added track's voice colors and imported vocal modes onto its singer's. Fails while no project is open or one
+        /// is still being read.</summary>
         [UnmanagedCallersOnly]
         public static int AddTrack(IntPtr source, IntPtr name) => Guard("add track", () => {
             if (!Usable) {
@@ -442,6 +443,9 @@ namespace OpenUtau.App.Embedding {
                 }
             } finally {
                 DocManager.Inst.EndUndoGroup();
+            }
+            for (int i = 0; i < loaded.tracks.Count; ++i) {
+                DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(first + i, true));
             }
             Log.Information($"Embedded OpenUtau added {loaded.tracks.Count} tracks from {source} as {name}");
         }

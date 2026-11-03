@@ -709,6 +709,44 @@ namespace OpenUtau.UiTest {
             Assert.Equal(new[] { (960, 3) }, PartsOf(project, 2));
         });
 
+        // A SynthV copy's vocal modes come in as curves of their own, such as Whisper, which a DiffSinger singer sings
+        // only once they are copied onto one of its voice colors. Adding the copy offers that, as opening it does.
+        [Fact]
+        public void AnAddedTrackOffersToMapItsVocalModes() => WithTracks((project, _, folder) => {
+            var singer = new ColoredSinger();
+            var singers = SingerManager.Inst.Singers;
+            singers[singer.Id] = singer;
+            var remap = new EmbeddedHost.RemapVoiceColors();
+            DocManager.Inst.AddSubscriber(remap);
+            try {
+                var copy = Core.Format.Ustx.Create();
+                var part = AddPart(copy, 0, 960, 3);
+                var whisper = new UExpressionDescriptor("Whisper", "whp", 0, 100, 0) { type = UExpressionType.Curve };
+                copy.RegisterExpression(whisper);
+                var curve = new UCurve(whisper);
+                curve.xs.AddRange(new[] { 960, 1440 });
+                curve.ys.AddRange(new[] { 20, 60 });
+                part.curves.Add(curve);
+                copy.AfterLoad();
+                copy.tracks[0].Singer = singer;
+                var source = Path.Combine(folder, "copy.ustx");
+                Assert.True(Core.Format.Ustx.Save(source, copy));
+
+                EmbeddedHost.AddTracks(source, "Lead 2");
+                HeadlessUi.Flush();
+                var dialog = OpenMapping(EmbeddedHost.DialogOwner());
+                // Map "Whisper" onto "breathy", the singer's second color, whose curve is cl02.
+                Assert.IsType<VoiceColorMappingViewModel>(dialog.DataContext).ColorMappings[1].SelectedIndex = 1;
+                Accept(dialog);
+
+                var added = Assert.Single(project.parts.OfType<UVoicePart>(), p => p.trackNo == 2);
+                Assert.Equal(40, Assert.Single(added.curves, c => c.abbr == "cl02").Sample(1200));
+            } finally {
+                DocManager.Inst.RemoveSubscriber(remap);
+                singers.Remove(singer.Id);
+            }
+        });
+
         [Fact]
         public void ARemovedTrackIsSavedAloneAndAddsBackAsItWas() => WithTracks((project, first, folder) => {
             var removed = Path.Combine(folder, "lead.ustx");
