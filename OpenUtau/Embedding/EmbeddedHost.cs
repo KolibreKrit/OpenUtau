@@ -832,6 +832,22 @@ namespace OpenUtau.App.Embedding {
 
         static EmbeddedShowcase? showcase;
         static string showcasePlan = "";
+
+        /// <summary>Colours the piano roll as the application's UTF-8 JSON <see cref="HostTheme"/> says until the next
+        /// call, or for null with the theme OpenUtau's preferences name. The preferences, which the standalone OpenUtau
+        /// may share, keep their theme. Main thread, once OpenUtau has started.</summary>
+        [UnmanagedCallersOnly]
+        public static int SetTheme(IntPtr json) => Guard("set theme", () => UseTheme(Utf8(json)));
+
+        /// <summary>The managed part of <see cref="SetTheme"/>. A theme it refuses leaves the colours as they were.</summary>
+        public static void UseTheme(string? json) {
+            App.HostTheme = json == null ? null : HostTheme.Parse(json, App.ThemeColorNames());
+            App.SetTheme();
+            if (!Core.Util.Preferences.Default.UseTrackColor) {
+                ThemeManager.ChangePianorollColor(null);
+            }
+        }
+
         static bool trackBarVisible;
 
         /// <summary>Captures the roll before Stage placement. A nonzero flag hides editor chrome until EndShowcase.</summary>

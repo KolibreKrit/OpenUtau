@@ -629,13 +629,13 @@ namespace OpenUtau.App.ViewModels {
         private void LoadTrackColor(UPart? part, UProject? project) {
             if (part == null || project == null) {
                 TrackAccentColor = ThemeManager.GetTrackColor("Blue").AccentColor;
-                ThemeManager.ChangePianorollColor("Blue");
+                ThemeManager.ChangePianorollColor(null);
                 return;
             }
             TrackAccentColor = ThemeManager.GetTrackColor(project.tracks[part.trackNo].TrackColor).AccentColor;
-            string name = Preferences.Default.UseTrackColor
+            string? name = Preferences.Default.UseTrackColor
                 ? project.tracks[part.trackNo].TrackColor
-                : "Blue";
+                : null;
             ThemeManager.ChangePianorollColor(name);
         }
 

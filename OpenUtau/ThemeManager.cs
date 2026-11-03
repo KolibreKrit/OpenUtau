@@ -160,13 +160,15 @@ namespace OpenUtau.App {
             MessageBus.Current.SendMessage(new ThemeChangedEvent());
         }
 
-        public static void ChangePianorollColor(string color) {
+        /// <summary>Colours the piano roll's keys, checkboxes and checkmarks with a track colour, or with
+        /// <see cref="UntrackedColor"/> when color is null.</summary>
+        public static void ChangePianorollColor(string? color) {
             if (Application.Current == null) {
                 return;
             }
             try {
                 IResourceDictionary resDict = Application.Current.Resources;
-                TrackColor tcolor = GetTrackColor(color);
+                TrackColor tcolor = color == null ? UntrackedColor() : GetTrackColor(color);
                 
                 resDict["SelectedTrackAccentBrush"] = tcolor.AccentColor;
                 resDict["SelectedTrackAccentLightBrush"] = tcolor.AccentColorLight;
@@ -286,6 +288,17 @@ namespace OpenUtau.App {
             }
             value = key;
             return false;
+        }
+
+        /// <summary>The piano roll's colour when it doesn't use the track's: a host theme's accent, otherwise Blue.</summary>
+        public static TrackColor UntrackedColor() {
+            if (App.HostTheme == null || Application.Current == null) {
+                return GetTrackColor("Blue");
+            }
+            var resources = Application.Current.Resources;
+            string Hex(string name) => ((Color)resources[name]!).ToString();
+            return new TrackColor("Host", Hex("SystemAccentColor"), Hex("SystemAccentColorDark1"),
+                Hex("SystemAccentColorLight1"), Hex("CenterKeyColorRight"));
         }
 
         public static TrackColor GetTrackColor(string name) {

@@ -14,7 +14,6 @@ using Avalonia.Rendering.Composition;
 using OpenUtau.App.Controls;
 using OpenUtau.Core;
 using OpenUtau.Core.Ustx;
-using OpenUtau.Core.Util;
 
 namespace OpenUtau.App.Embedding {
     public sealed class EmbeddedShowcase {
@@ -35,7 +34,6 @@ namespace OpenUtau.App.Embedding {
         double inputHostSeconds, pendingSeconds;
         string pendingPlan = "", renderedFrame = "";
         bool frameQueued;
-        string theme = "Light";
         readonly List<Action> restoreChrome = new();
 
         public EmbeddedShowcase(PianoRoll roll) {
@@ -91,9 +89,6 @@ namespace OpenUtau.App.Embedding {
             tickOffset = vm.TickOffset;
             trackHeight = vm.TrackHeight;
             trackOffset = vm.TrackOffset;
-            theme = Preferences.Default.ThemeName;
-            Preferences.Default.ThemeName = "Dark";
-            App.SetTheme();
             active = true;
             canvas.HostedFrame += DrawFrame;
             vm.SetHostPlayPos(DocManager.Inst.playPosTick);
@@ -304,8 +299,6 @@ namespace OpenUtau.App.Embedding {
                 DocManager.Inst.ExecuteCmd(new LoadPartNotification(part, DocManager.Inst.Project, part.position));
                 roll.AttachExpressions();
             }
-            Preferences.Default.ThemeName = theme;
-            App.SetTheme();
             vm.ShowTips = showTips;
             vm.ShowPhoneme = showPhoneme;
             vm.ShowWaveform = showWaveform;
