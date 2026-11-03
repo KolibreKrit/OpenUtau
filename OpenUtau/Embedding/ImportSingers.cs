@@ -7,6 +7,12 @@ using OpenUtau.Core.Ustx;
 
 namespace OpenUtau.App.Embedding {
     public static class ImportSingers {
+        public static string ReportOf(UProject project) => JsonSerializer.Serialize(new {
+            schema = "svcover.openutau-imported-singers/1",
+            tracks = project.tracks.Select(track => new { track = track.TrackName,
+                singer = track.Singer?.Found == true ? track.Singer.LocalizedName : null })
+        });
+
         public static string Catalog() => JsonSerializer.Serialize(new {
             schema = "svcover.openutau-import-singers/1",
             singers = SingerManager.Inst.Singers.Values.OrderBy(singer => singer.LocalizedName).Select(singer => {

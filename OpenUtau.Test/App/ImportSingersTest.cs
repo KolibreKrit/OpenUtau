@@ -52,7 +52,11 @@ namespace OpenUtau.Test.App {
                     var source = Path.Combine(folder, "song.svp");
                     File.WriteAllText(source, svp.ToJsonString());
                     var destination = Path.Combine(folder, "song.ustx");
-                    EmbeddedHost.Import(source, destination);
+                    var importedNames = EmbeddedHost.Import(source, destination);
+                    using var report = JsonDocument.Parse(importedNames);
+                    Assert.Equal("svcover.openutau-imported-singers/1", report.RootElement.GetProperty("schema").GetString());
+                    Assert.Equal(JsonValueKind.Null, report.RootElement.GetProperty("tracks")[0].GetProperty("singer").ValueKind);
+                    Assert.Equal("Chosen singer", report.RootElement.GetProperty("tracks")[1].GetProperty("singer").GetString());
                     var imported = global::OpenUtau.Core.Format.Ustx.Load(destination);
                     Assert.Equal(singer.Id, imported.tracks[1].Singer.Id);
                     Assert.Equal(factory.Id, imported.tracks[1].Phonemizer.Id);
