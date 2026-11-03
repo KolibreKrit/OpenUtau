@@ -61,6 +61,7 @@ namespace OpenUtau.App.Embedding {
         static string? pendingServer;
         // Start's search for tools, singers and plugins.
         static Task loading = Task.CompletedTask;
+        static string importedSingers = "{}";
         // Made when first shown, so an import before Start, as in tests, doesn't tie Avalonia to its thread.
         static TextBlock? statusText;
         static TextBlock status => statusText ??= new() {
@@ -365,13 +366,33 @@ namespace OpenUtau.App.Embedding {
         /// <summary>Reads a project in another format, such as an SVP, through OpenUtau's own importer, and saves it
         /// as a new USTX without opening it, so the open project stays as it was.</summary>
         [UnmanagedCallersOnly]
-        public static int ImportProject(IntPtr source, IntPtr destination) => Guard("import project", () =>
-            Import(Utf8(source) ?? throw new ArgumentNullException(nameof(source)),
-                Utf8(destination) ?? throw new ArgumentNullException(nameof(destination))));
+        public static int ImportProject(IntPtr source, IntPtr destination) => Guard("import project", () => {
+            importedSingers = Import(Utf8(source) ?? throw new ArgumentNullException(nameof(source)),
+                Utf8(destination) ?? throw new ArgumentNullException(nameof(destination)));
+        });
+
+        static void SendText(IntPtr callback, IntPtr context, string json) {
+            if (callback == IntPtr.Zero) throw new ArgumentNullException(nameof(callback));
+            var receive = Marshal.GetDelegateForFunctionPointer<TextFunction>(callback);
+            var bytes = Encoding.UTF8.GetBytes(json);
+            var pinned = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+            try { receive(context, pinned.AddrOfPinnedObject(), bytes.Length); }
+            finally { pinned.Free(); }
+        }
+
+        [UnmanagedCallersOnly]
+        public static int ReadImportSingers(IntPtr callback, IntPtr context) => Guard("read import singers", () => {
+            Task.WhenAny(loading).Wait();
+            SendText(callback, context, ImportSingers.Catalog());
+        });
+
+        [UnmanagedCallersOnly]
+        public static int ReadImportedSingers(IntPtr callback, IntPtr context) => Guard("read imported singers", () =>
+            SendText(callback, context, importedSingers));
 
         /// <summary>The managed part of <see cref="ImportProject"/>. It refuses a destination that exists, and the
         /// USTX appears whole or not at all.</summary>
-        public static void Import(string source, string destination) {
+        public static string Import(string source, string destination) {
             if (File.Exists(destination)) {
                 throw new IOException($"\"{destination}\" already exists");
             }
@@ -381,6 +402,8 @@ namespace OpenUtau.App.Embedding {
             // The phonemizer would answer the importer's requests through the open project.
             var project = DocManager.Inst.ReadWithoutPhonemizing(() => Core.Format.Formats.ReadProject(new[] { source }))
                 ?? throw new InvalidDataException($"No project in \"{source}\"");
+            if (Path.GetExtension(source).Equals(".svp", StringComparison.OrdinalIgnoreCase))
+                ImportSingers.Select(project, File.ReadAllText(source));
             project.ustxVersion = Core.Format.Ustx.kUstxVersion;
             project.FilePath = destination;
             project.BeforeSave();
@@ -393,6 +416,7 @@ namespace OpenUtau.App.Embedding {
                 File.Delete(partial);
             }
             Log.Information($"Embedded OpenUtau imported {source} as {destination}");
+            return ImportSingers.ReportOf(project);
         }
 
         /// <summary>Adds the tracks of a USTX, such as one <see cref="ImportProject"/> made, after the open project's
