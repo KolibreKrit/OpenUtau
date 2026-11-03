@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Media;
 using Avalonia.VisualTree;
 using Avalonia.Rendering.Composition;
 using OpenUtau.App.Controls;
@@ -18,6 +19,9 @@ using OpenUtau.Core.Util;
 namespace OpenUtau.App.Embedding {
     public sealed class EmbeddedShowcase {
         readonly PianoRoll roll;
+        readonly NotesCanvas canvas;
+        Control? frameOrigin;
+        double drawnPlayheadX;
         UVoicePart? part;
         double tickWidth, tickOffset, trackHeight, trackOffset;
         bool active, showTips, showPhoneme, showWaveform, playheadWasVisible, highlightWasVisible, updating;
@@ -28,11 +32,14 @@ namespace OpenUtau.App.Embedding {
         long externalViewWrites;
         double inputHostSeconds, pendingSeconds;
         string pendingPlan = "", renderedFrame = "";
-        bool frameQueued, frameInFlight;
+        bool frameQueued;
         string theme = "Light";
         readonly List<Action> restoreChrome = new();
 
-        public EmbeddedShowcase(PianoRoll roll) { this.roll = roll; }
+        public EmbeddedShowcase(PianoRoll roll) {
+            this.roll = roll;
+            canvas = roll.GetVisualDescendants().OfType<NotesCanvas>().First();
+        }
 
         public string RenderedFrame => Volatile.Read(ref renderedFrame);
 
@@ -41,26 +48,31 @@ namespace OpenUtau.App.Embedding {
         public void RequestFrame(string plan, double seconds, Control origin) {
             pendingPlan = plan;
             pendingSeconds = seconds;
-            if (!active || frameQueued || Volatile.Read(ref frameInFlight)) return;
+            frameOrigin = origin;
+            if (!active || frameQueued) return;
             var top = TopLevel.GetTopLevel(roll);
             if (top == null) return;
             frameQueued = true;
             top.RequestAnimationFrame(_ => {
                 frameQueued = false;
                 if (!active) return;
-                Volatile.Write(ref frameInFlight, true);
                 Update(pendingPlan, pendingSeconds);
-                var compositor = ElementComposition.GetElementVisual(roll)!.Compositor;
-                var batch = compositor.RequestCompositionBatchCommitAsync();
-                compositor.RequestCompositionUpdate(() => {
-                    if (!active) { Volatile.Write(ref frameInFlight, false); return; }
-                    string snapshot = Snapshot(origin);
-                    batch.Rendered.ContinueWith(_ => {
-                        if (Volatile.Read(ref active)) Volatile.Write(ref renderedFrame, snapshot);
-                        Volatile.Write(ref frameInFlight, false);
-                    }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
-                });
+                canvas.InvalidateVisual();
             });
+        }
+
+        void DrawFrame(DrawingContext context) {
+            if (!active) return;
+            var vm = roll.ViewModel.NotesViewModel;
+            drawnPlayheadX = vm.PlayPosX;
+            context.DrawLine(new Pen(ThemeManager.AccentBrush2, 1), new Point(drawnPlayheadX, 0),
+                new Point(drawnPlayheadX, vm.Bounds.Height));
+            if (frameOrigin == null) return;
+            string snapshot = Snapshot(frameOrigin);
+            var batch = ElementComposition.GetElementVisual(canvas)!.Compositor.RequestCompositionBatchCommitAsync();
+            batch.Rendered.ContinueWith(_ => {
+                if (Volatile.Read(ref active)) Volatile.Write(ref renderedFrame, snapshot);
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
 
         public void Begin(bool hideChrome) {
@@ -77,10 +89,11 @@ namespace OpenUtau.App.Embedding {
             Preferences.Default.ThemeName = "Dark";
             App.SetTheme();
             active = true;
+            canvas.HostedFrame += DrawFrame;
             vm.SetHostPlayPos(DocManager.Inst.playPosTick);
             playheadLine = roll.FindControl<Control>("PlayPosLine");
             playheadWasVisible = playheadLine?.IsVisible ?? false;
-            playheadLine?.SetCurrentValue(Control.IsVisibleProperty, true);
+            playheadLine?.SetCurrentValue(Control.IsVisibleProperty, false);
             playheadHighlight = roll.FindControl<Control>("PlayPosHighlight");
             highlightWasVisible = playheadHighlight?.IsVisible ?? false;
             playheadHighlight?.SetCurrentValue(Control.IsVisibleProperty, false);
@@ -189,10 +202,10 @@ namespace OpenUtau.App.Embedding {
             var project = DocManager.Inst.Project;
             var axis = project.timeAxis;
             int tick = axis.MsPosToTickPos(seconds * 1000);
-            EmbeddedHost.ShowPartIn(roll, track - 1, tick, false);
             var vm = roll.ViewModel.NotesViewModel;
-            if (vm.Part == null || vm.Bounds.Width <= 0) return;
-            playheadLine?.SetCurrentValue(Control.IsVisibleProperty, true);
+            vm.BeginHostFrame(axis.MsPosToNonExactTickPos(seconds * 1000));
+            EmbeddedHost.ShowPartIn(roll, track - 1, tick, false);
+            if (vm.Part == null || vm.Bounds.Width <= 0) { vm.EndHostFrame(); return; }
             double pixels = vm.Bounds.Width * N("shown", 1);
             double width = Math.Max(1.2, pixels / 320), most = Math.Max(1.2, pixels / 240);
             double left, right;
@@ -234,7 +247,7 @@ namespace OpenUtau.App.Embedding {
             vm.TickOffset = l - vm.Part.position;
             if (Get("pitch") == "1" && centre.HasValue)
                 vm.TrackOffset = vm.TrackCount - 0.5 - centre.Value - N("middle", 0.5) * vm.ViewportTracks;
-            vm.SetHostPlayPos(axis.MsPosToNonExactTickPos(seconds * 1000));
+            vm.EndHostFrame();
             playheadHighlight?.SetCurrentValue(Control.IsVisibleProperty, false);
         }
 
@@ -254,11 +267,11 @@ namespace OpenUtau.App.Embedding {
                 yHigh = at.Y, yLow = at.Y + vm.Bounds.Height,
                 playhead = hostSeconds,
                 hostInputSeconds = inputHostSeconds,
-                playheadX = playheadLine != null ? Canvas.GetLeft(playheadLine) : vm.PlayPosX,
+                playheadX = drawnPlayheadX,
                 modelPlayheadX = vm.PlayPosX,
                 expectedX = (axis.MsPosToNonExactTickPos(hostSeconds * 1000) - offset) * vm.TickWidth,
                 highlightVisible = playheadHighlight?.IsVisible ?? false,
-                lineVisible = playheadLine?.IsVisible ?? false,
+                lineVisible = active,
                 externalViewWrites,
                 held, scrolling,
                 sequence = ++sequence,
@@ -268,6 +281,8 @@ namespace OpenUtau.App.Embedding {
         public void End() {
             if (!active) return;
             Volatile.Write(ref active, false);
+            canvas.HostedFrame -= DrawFrame;
+            canvas.InvalidateVisual();
             roll.ViewModel.NotesViewModel.PropertyChanged -= ViewChanged;
             roll.ViewModel.NotesViewModel.SetHostPlayPos(null);
             playheadLine?.SetCurrentValue(Control.IsVisibleProperty, playheadWasVisible);

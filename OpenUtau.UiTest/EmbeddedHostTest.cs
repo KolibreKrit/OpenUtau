@@ -2,15 +2,18 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using Avalonia.Media;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using OpenUtau.App.Controls;
 using OpenUtau.App.Embedding;
 using OpenUtau.App.ViewModels;
@@ -150,7 +153,16 @@ namespace OpenUtau.UiTest {
                 Assert.False(line.IsVisible);
                 var stage = new EmbeddedShowcase(roll);
                 stage.Begin(false);
-                Assert.True(line.IsVisible);
+                stage.Update("steer=1\tscroll=smooth\tbar=2\tswitches=0:1", 1);
+                HeadlessUi.Flush();
+                Assert.False(line.IsVisible);
+                var canvas = roll.GetVisualDescendants().OfType<Control>().First(c => c.GetType().Name == "NotesCanvas");
+                var drawing = new DrawingGroup();
+                using (var context = drawing.Open()) canvas.Render(context);
+                var lines = drawing.Children.OfType<GeometryDrawing>().Select(d => d.Geometry!.Bounds)
+                    .Where(b => b.Width < 0.01 && b.Height > canvas.Bounds.Height * 0.9);
+                var painted = Assert.Single(lines);
+                Assert.InRange(Math.Abs(painted.X - roll.ViewModel.NotesViewModel.PlayPosX), 0, 0.01);
                 stage.End();
                 Assert.False(line.IsVisible);
             });
@@ -224,6 +236,30 @@ namespace OpenUtau.UiTest {
                     Assert.Equal(1, prefs.PlaybackAutoScroll);
                     prefs.PlaybackAutoScroll = autoScroll;
                 }
+            });
+        }
+
+        [Fact]
+        public void ShowcasePublishesNoIntermediatePlayheadWhileMovingTheCamera() {
+            var project = Core.Format.Ustx.Create();
+            var part = AddPart(project, 0, 0, 40);
+            project.AfterLoad();
+            WithPianoRoll(project, part, roll => {
+                var vm = roll.ViewModel.NotesViewModel;
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(true);
+                HeadlessUi.Flush();
+                const string plan = "steer=1\tscroll=smooth\tbar=2\tswitches=0:1";
+                stage.Update(plan, 0);
+                double before = vm.PlayPosX;
+                double tick = project.timeAxis.MsPosToNonExactTickPos(2000);
+                vm.BeginHostFrame(tick);
+                vm.TickOffset += 480;
+                DocManager.Inst.ExecuteCmd(new SetPlayPosTickNotification(0));
+                Assert.Equal(before, vm.PlayPosX);
+                vm.EndHostFrame();
+                Assert.Equal((tick - part.position - vm.TickOffset) * vm.TickWidth, vm.PlayPosX);
+                stage.End();
             });
         }
 

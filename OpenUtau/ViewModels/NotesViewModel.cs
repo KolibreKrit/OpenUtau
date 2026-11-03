@@ -1079,15 +1079,29 @@ namespace OpenUtau.App.ViewModels {
         }
 
         double? hostPlayPosTick;
+        bool hostViewChanging;
 
         // A hosted presentation owns scrolling and the displayed clock until it releases this override.
         // Keep the saved auto-scroll preference untouched, including if the host exits unexpectedly.
         public void SetHostPlayPos(double? tick) {
+            hostViewChanging = false;
             hostPlayPosTick = tick;
             SetPlayPos(DocManager.Inst.playPosTick, false);
         }
 
+        // Publish the playhead only after both the camera and host time describe the completed frame.
+        public void BeginHostFrame(double tick) {
+            hostViewChanging = true;
+            hostPlayPosTick = tick;
+        }
+
+        public void EndHostFrame() {
+            hostViewChanging = false;
+            SetPlayPos(DocManager.Inst.playPosTick, false);
+        }
+
         private void SetPlayPos(int tick, bool waitingRendering) {
+            if (hostViewChanging) return;
             if (hostPlayPosTick is double hostTick) {
                 double relative = hostTick - (Part?.position ?? 0);
                 PlayPosWaitingRendering = false;
