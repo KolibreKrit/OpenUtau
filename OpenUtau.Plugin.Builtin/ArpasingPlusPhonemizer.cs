@@ -296,6 +296,16 @@ namespace OpenUtau.Plugin.Builtin {
 
         private UOto runningOto = null;
 
+        protected override Phoneme[] PreviewFollowingNote(Note next, Note[] previous) {
+            // A preview must not advance sample continuity before the real note is processed.
+            var saved = (runningOto, vc_FallBack, phoneticHint);
+            try {
+                return base.PreviewFollowingNote(next, previous);
+            } finally {
+                (runningOto, vc_FallBack, phoneticHint) = saved;
+            }
+        }
+
         protected override void SyncAttributes(Note[] notes, List<string> phonemeSymbols, int startIndex, List<PhonemeAttributes> attrList) {
             if (singer == null || !singer.Loaded || phonemeSymbols.Count == 0 || notes == null || notes.Length == 0) return;
 

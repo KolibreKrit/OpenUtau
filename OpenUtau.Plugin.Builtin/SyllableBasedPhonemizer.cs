@@ -225,6 +225,10 @@ namespace OpenUtau.Plugin.Builtin {
         }
 
         public override Result Process(Note[] notes, Note? prev, Note? next, Note? prevNeighbour, Note? nextNeighbour, Note[] prevNeighbours) {
+            return Process(notes, prev, next, prevNeighbour, nextNeighbour, prevNeighbours, true);
+        }
+
+        Result Process(Note[] notes, Note? prev, Note? next, Note? prevNeighbour, Note? nextNeighbour, Note[] prevNeighbours, bool addSustains) {
             error = "";
             if (singer == null || !singer.Loaded) {
                 return MakeSimpleResult("");
@@ -327,48 +331,65 @@ namespace OpenUtau.Plugin.Builtin {
 
             var phonemes = new List<Phoneme>();
             int globalPhonemeIndex = 0;
+            bool previousHasSustain = false;
 
             foreach (var bucket in syllablePhonemeBuckets) {
-                var madePhonemes = MakePhonemes(
-                    bucket.symbols, 
-                    bucket.duration, 
-                    bucket.position, 
-                    bucket.isEnding, 
-                    bucket.tone, 
-                    workingAttributes.ToArray(), 
-                    globalPhonemeIndex
+                List<Phoneme> MakeBucket() => MakePhonemes(
+                    bucket.symbols, bucket.duration, bucket.position, bucket.isEnding,
+                    bucket.tone, workingAttributes.ToArray(), globalPhonemeIndex
                 ).Where(p => p.phoneme != null).ToList();
+                var madePhonemes = MakeBucket();
+                if (madePhonemes.Count == 0) continue;
+                // A sustain is optional. Keep the vowel and consonant timing when the next
+                // transition starts before the sustain would fit.
+                if (previousHasSustain && phonemes.Last().position >= madePhonemes[0].position) {
+                    phonemes.RemoveAt(phonemes.Count - 1);
+                    globalPhonemeIndex--;
+                    madePhonemes = MakeBucket();
+                }
+                previousHasSustain = false;
 
-            int currentSyllablePhonemeCount = madePhonemes.Count;
+                int currentSyllablePhonemeCount = madePhonemes.Count;
 
-            if (!bucket.isEnding && madePhonemes.Count > 0) {
-                var basePhoneme = madePhonemes.Last();
-                string baseAlias = basePhoneme.phoneme ?? "";
+                if (!bucket.isEnding && madePhonemes.Count > 0) {
+                    var basePhoneme = madePhonemes.Last();
+                    string baseAlias = basePhoneme.phoneme ?? "";
 
-                (string sustain, double offset) sustainData = default;
-                bool hasSustain = vowelSustains.TryGetValue(baseAlias, out sustainData)
-                            || (!string.IsNullOrEmpty(bucket.vowel) && vowelSustains.TryGetValue(bucket.vowel, out sustainData));
+                    (string sustain, double offset) sustainData = default;
+                    bool hasSustain = vowelSustains.TryGetValue(baseAlias, out sustainData)
+                                || (!string.IsNullOrEmpty(bucket.vowel) && vowelSustains.TryGetValue(bucket.vowel, out sustainData));
 
-                if (hasSustain) {
-                    string mappedSustain = ValidateAliasIfNeeded(sustainData.sustain, bucket.tone);
-                    if (HasOto(mappedSustain, bucket.tone) || HasOto(sustainData.sustain, bucket.tone)) {
-                        int offsetTicks = MsToTick(GetTransitionBasicLengthMsByConstant() * sustainData.offset);
-                        madePhonemes.Add(new Phoneme {
-                            phoneme = sustainData.sustain,
-                            position = basePhoneme.position + offsetTicks,
-                            index = globalPhonemeIndex + currentSyllablePhonemeCount
-                        });
-                        currentSyllablePhonemeCount++;
+                    if (addSustains && hasSustain) {
+                        string mappedSustain = ValidateAliasIfNeeded(sustainData.sustain, bucket.tone);
+                        if (HasOto(mappedSustain, bucket.tone) || HasOto(sustainData.sustain, bucket.tone)) {
+                            int offsetTicks = MsToTick(GetTransitionBasicLengthMsByConstant() * sustainData.offset);
+                            if (basePhoneme.position + offsetTicks < notes.Last().position - notes[0].position + notes.Last().duration) {
+                                madePhonemes.Add(new Phoneme {
+                                    phoneme = sustainData.sustain,
+                                    position = basePhoneme.position + offsetTicks,
+                                    index = globalPhonemeIndex + currentSyllablePhonemeCount
+                                });
+                                currentSyllablePhonemeCount++;
+                                previousHasSustain = true;
+                            }
+                        }
                     }
                 }
-            }
 
                 phonemes.AddRange(madePhonemes);
-                // Only increment by phonemes that were ACTUALLY generated
                 globalPhonemeIndex += currentSyllablePhonemeCount;
             }
 
-            // Re-index all phonemes sequentially so they align with the UI's 0, 1, 2...
+            if (previousHasSustain && nextNeighbour.HasValue) {
+                // The next word owns its leading consonants, which can start inside this note.
+                // Look ahead without sustains so this check cannot recurse into later words.
+                var following = PreviewFollowingNote(nextNeighbour.Value, notes);
+                if (following.Length > 0 && phonemes.Last().position >=
+                    nextNeighbour.Value.position - notes[0].position + following[0].position) {
+                    phonemes.RemoveAt(phonemes.Count - 1);
+                }
+            }
+
             for (int i = 0; i < phonemes.Count; i++) {
                 var p = phonemes[i];
                 p.index = i;
@@ -380,6 +401,18 @@ namespace OpenUtau.Plugin.Builtin {
             return new Result() {
                 phonemes = finalPhonemes
             };
+        }
+
+        protected virtual Phoneme[] PreviewFollowingNote(Note next, Note[] previous) {
+            var savedGlides = runtimeGlides;
+            var savedError = error;
+            runtimeGlides = new HashSet<string>(StringComparer.Ordinal);
+            try {
+                return Process(new[] { next }, previous[0], null, previous.Last(), null, previous, false).phonemes;
+            } finally {
+                runtimeGlides = savedGlides;
+                error = savedError;
+            }
         }
 
         protected virtual Phoneme[] AssignAllAffixes(List<Phoneme> phonemes, Note[] notes, Note[] prevs, List<PhonemeAttributes> dynamicAttributes = null) {
