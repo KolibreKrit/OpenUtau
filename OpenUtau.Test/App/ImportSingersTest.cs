@@ -31,6 +31,7 @@ namespace OpenUtau.Test.App {
                 var project = new UProject();
                 project.tracks.Add(new UTrack(project));
                 using var catalog = JsonDocument.Parse(ImportSingers.Catalog());
+                Assert.Equal("svcover.openutau-import-singers/1", catalog.RootElement.GetProperty("schema").GetString());
                 Assert.Contains(catalog.RootElement.GetProperty("singers").EnumerateArray(),
                     entry => entry.GetProperty("id").GetString() == singer.Id
                         && entry.GetProperty("name").GetString() == singer.Name);

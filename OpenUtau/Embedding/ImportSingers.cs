@@ -8,6 +8,7 @@ using OpenUtau.Core.Ustx;
 namespace OpenUtau.App.Embedding {
     public static class ImportSingers {
         public static string Catalog() => JsonSerializer.Serialize(new {
+            schema = "svcover.openutau-import-singers/1",
             singers = SingerManager.Inst.Singers.Values.OrderBy(singer => singer.LocalizedName).Select(singer => {
                 var phonemizer = SingerManager.PhonemizerFor(singer);
                 return new { id = singer.Id, name = singer.LocalizedName, language = phonemizer?.language ?? "",
