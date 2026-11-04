@@ -674,6 +674,15 @@ namespace OpenUtau.UiTest {
         [InlineData("{not: [closed")]
         [InlineData("just words")]
         [InlineData("position: 10")]
+        [InlineData("pitch: {}\nvibrato: {}")]
+        [InlineData("pitch: {snap_first: false}\nvibrato: {}")]
+        [InlineData("pitch: {data: null}\nvibrato: {}")]
+        [InlineData("pitch: {data: [null]}\nvibrato: {}")]
+        [InlineData("pitch: {data: [{x: 0, y: 0}]}\nvibrato: {}\nphoneme_expressions: null")]
+        [InlineData("pitch: {data: [{x: 0, y: 0}]}\nvibrato: {}\nphoneme_expressions: [null]")]
+        [InlineData("pitch: {data: [{x: 0, y: 0}]}\nvibrato: {}\nphoneme_expressions: [{}]")]
+        [InlineData("pitch: {data: [{x: 0, y: 0}]}\nvibrato: {}\nphoneme_overrides: null")]
+        [InlineData("pitch: {data: [{x: 0, y: 0}]}\nvibrato: {}\nphoneme_overrides: [null]")]
         public void StateThatIsNoNoteRefusesTheBatch(string state) {
             var project = Project(out var first, out _);
             WithPianoRoll(project, first, pianoRoll => {

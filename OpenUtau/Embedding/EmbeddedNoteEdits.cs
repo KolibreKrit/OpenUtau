@@ -38,6 +38,10 @@ namespace OpenUtau.App.Embedding {
         });
         public sealed record Value(int position, int duration, int tone, string lyric, string phonemes = "", string group = "", int offset = 0, int from = 0, string? state = null);
         public sealed record Edit(int track, string group, int offset, Value[] before, Value[] after, Value[]? source);
+        // A note added to its part can't be taken back, and validating it there throws on any of these.
+        static bool Whole(UNote? note) => note?.pitch?.data != null && note.pitch.data.Count > 0 && !note.pitch.data.Contains(null!)
+            && note.vibrato != null && note.phonemeOverrides != null && !note.phonemeOverrides.Contains(null!)
+            && note.phonemeExpressions != null && note.phonemeExpressions.All(e => e?.abbr != null);
         public static string Apply(UProject project, string edits) {
             Edit[]? batch;
             try { batch = JsonSerializer.Deserialize<Edit[]>(edits); }
@@ -72,7 +76,7 @@ namespace OpenUtau.App.Embedding {
                     if (value.state != null) {
                         try { note = Yaml.DefaultDeserializer.Deserialize<UNote>(value.state); }
                         catch (YamlException) { return "bad-request"; }
-                        if (note?.pitch == null || note.vibrato == null) return "bad-request";
+                        if (!Whole(note)) return "bad-request";
                         note.AfterLoad(project, project.tracks[part.trackNo], part);
                     } else {
                         note = value.from >= 0 && value.from < before.Count ? before[value.from].Clone() : project.CreateNote();
