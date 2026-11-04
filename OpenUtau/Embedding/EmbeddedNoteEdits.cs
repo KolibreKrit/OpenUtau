@@ -4,33 +4,44 @@ using System.Collections.Generic;
 using OpenUtau.Core;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using OpenUtau.Core.Ustx;
+using OpenUtau.Core.Util;
+using YamlDotNet.Core;
 namespace OpenUtau.App.Embedding {
     public static class EmbeddedNoteEdits {
         sealed class Identity { public readonly string Id = Guid.NewGuid().ToString(); }
         static readonly ConditionalWeakTable<UVoicePart, Identity> identities = new();
         public static string Id(UVoicePart part) => identities.GetOrCreateValue(part).Id;
-        public static string Read(UProject project, int track, int from, int to, Func<UNote, bool>? selected = null) =>
+        static readonly JsonSerializerOptions skipNull = new() { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+        // With states, each note also gives its whole state as text an edit can bring it back from. It's kept apart as a
+        // snapshot can be read often and most readers want only timing and words.
+        public static string Read(UProject project, int track, int from, int to, Func<UNote, bool>? selected = null, bool states = false) =>
             JsonSerializer.Serialize(EmbeddedNotes.VoiceParts(project, track).SelectMany((part, reference) => {
                 var phonemes = EmbeddedNotes.PhonemesByNote(part);
                 return part.notes.Select((note, index) => new {
                     track, reference, group = Id(part), offset = part.position, index,
                     position = note.position, duration = note.duration, tone = note.tone, lyric = note.lyric,
                     selected = selected?.Invoke(note) ?? false,
-                    sung = string.Join(" ", phonemes[note].Select(p => p.phoneme))
+                    sung = string.Join(" ", phonemes[note].Select(p => p.phoneme)),
+                    state = states ? Yaml.DefaultSerializer.Serialize(note) : null
                 });
-            }).Where(n => n.offset + n.position >= from && n.offset + n.position < to));
-        public static string Snapshot(UProject project, Func<UNote, bool>? selected = null) => JsonSerializer.Serialize(new {
+            }).Where(n => n.offset + n.position >= from && n.offset + n.position < to), skipNull);
+        public static string Snapshot(UProject project, Func<UNote, bool>? selected = null, int? statesOf = null) => JsonSerializer.Serialize(new {
             tracks = project.tracks.Select(t => t.TrackName),
             references = Enumerable.Range(0, project.tracks.Count).SelectMany(track =>
                 EmbeddedNotes.VoiceParts(project, track).Select((part, reference) => new {
                     track, reference, group = Id(part), offset = part.position, muted = project.tracks[track].Mute
                 })),
             notes = Enumerable.Range(0, project.tracks.Count).SelectMany(track =>
-                JsonSerializer.Deserialize<JsonElement[]>(Read(project, track, 0, int.MaxValue, selected))!)
+                JsonSerializer.Deserialize<JsonElement[]>(Read(project, track, 0, int.MaxValue, selected, track == statesOf))!)
         });
-        public sealed record Value(int position, int duration, int tone, string lyric, string phonemes = "", string group = "", int offset = 0, int from = 0);
+        public sealed record Value(int position, int duration, int tone, string lyric, string phonemes = "", string group = "", int offset = 0, int from = 0, string? state = null);
         public sealed record Edit(int track, string group, int offset, Value[] before, Value[] after, Value[]? source);
+        // A note added to its part can't be taken back, and validating it there throws on any of these.
+        static bool Whole(UNote? note) => note?.pitch?.data != null && note.pitch.data.Count > 0 && !note.pitch.data.Contains(null!)
+            && note.vibrato != null && note.phonemeOverrides != null && !note.phonemeOverrides.Contains(null!)
+            && note.phonemeExpressions != null && note.phonemeExpressions.All(e => e?.abbr != null);
         public static string Apply(UProject project, string edits) {
             Edit[]? batch;
             try { batch = JsonSerializer.Deserialize<Edit[]>(edits); }
@@ -60,7 +71,16 @@ namespace OpenUtau.App.Embedding {
                     if (value.position < 0 || value.duration <= 0 || value.tone < 0 || value.tone > 127
                         || string.IsNullOrWhiteSpace(value.lyric) || value.lyric.Length > 1024
                         || !string.IsNullOrEmpty(value.phonemes) || (long)value.position + value.duration > int.MaxValue) return "bad-request";
-                    var note = value.from >= 0 && value.from < before.Count ? before[value.from].Clone() : new UNote();
+                    // state brings back a note the app kept, and from names one of before to copy. With neither it's a new note.
+                    UNote? note;
+                    if (value.state != null) {
+                        try { note = Yaml.DefaultDeserializer.Deserialize<UNote>(value.state); }
+                        catch (YamlException) { return "bad-request"; }
+                        if (!Whole(note)) return "bad-request";
+                        note.AfterLoad(project, project.tracks[part.trackNo], part);
+                    } else {
+                        note = value.from >= 0 && value.from < before.Count ? before[value.from].Clone() : project.CreateNote();
+                    }
                     note.position = value.position; note.duration = value.duration; note.tone = value.tone; note.lyric = value.lyric;
                     if (part.notes.Any(n => !before.Contains(n) && n.position < note.End && note.position < n.End)
                         || after.Any(n => n.position < note.End && note.position < n.End)) return "occupied";

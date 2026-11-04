@@ -1,9 +1,30 @@
+using System.Linq;
 using System.Text.Json;
 using OpenUtau.App.Embedding;
 using OpenUtau.Core.Ustx;
 using Xunit;
 namespace OpenUtau.Test.App {
     public class EmbeddedNoteEditsTest {
+        [Fact]
+        public void SnapshotGivesStatesOnlyWhenAskedAndOnlyForThatTrack() {
+            var project = OpenUtau.Core.Format.Ustx.Create();
+            project.tracks.Add(new UTrack(project) { TrackNo = 1 });
+            foreach (var track in new[] { 0, 1 }) {
+                var part = new UVoicePart { trackNo = track, position = 0 };
+                part.notes.Add(project.CreateNote(60, 0, 480));
+                project.parts.Add(part);
+            }
+            string?[] states(string snapshot) {
+                using var read = JsonDocument.Parse(snapshot);
+                return read.RootElement.GetProperty("notes").EnumerateArray()
+                    .Select(n => n.TryGetProperty("state", out var state) ? state.GetString() : null).ToArray();
+            }
+            Assert.Equal(new string?[] { null, null }, states(EmbeddedNoteEdits.Snapshot(project)));
+            var asked = states(EmbeddedNoteEdits.Snapshot(project, statesOf: 1));
+            Assert.Null(asked[0]);
+            Assert.Contains("tone: 60", asked[1]);
+        }
+
         [Fact]
         public void RangeReadsLyricsAtAbsoluteTicksAcrossParts() {
             var project = OpenUtau.Core.Format.Ustx.Create();
