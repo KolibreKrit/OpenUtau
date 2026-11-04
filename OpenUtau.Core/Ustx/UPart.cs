@@ -116,7 +116,7 @@ namespace OpenUtau.Core.Ustx {
             overridePhonemizers.Clear();
         }
 
-        public override void Validate(ValidateOptions options, UProject project, UTrack track) {
+        void LinkNotes() {
             UNote lastNote = null;
             foreach (UNote note in notes) {
                 note.Prev = lastNote;
@@ -135,6 +135,39 @@ namespace OpenUtau.Core.Ustx {
                     note.Extends = null;
                 }
             }
+        }
+
+        /// <summary>
+        /// Each word's notes and the index of its first, as the phonemizer gets them: a note and the + notes that
+        /// extend it. A note overlapping the one before gets no phonemes. Needs the notes linked.
+        /// </summary>
+        IEnumerable<(int index, List<UNote> notes)> Words() {
+            int noteIndex = -1;
+            foreach (var note in notes) {
+                noteIndex++;
+                if (note.Prev?.End > note.position || note.Extends != null) {
+                    continue;
+                }
+                var group = new List<UNote>() { note };
+                var next = note.Next;
+                while (next != null && next.Extends == note) {
+                    group.Add(next);
+                    next = next.Next;
+                }
+                yield return (noteIndex, group);
+            }
+        }
+
+        /// <summary>
+        /// The words of this part as its phonemizer gets them, without asking for phonemes.
+        /// </summary>
+        public Phonemizer.Note[][] PhonemizerWords(UTrack track) {
+            LinkNotes();
+            return Words().Select(word => word.notes.Select(note => note.ToPhonemizerNote(track, this)).ToArray()).ToArray();
+        }
+
+        public override void Validate(ValidateOptions options, UProject project, UTrack track) {
+            LinkNotes();
             foreach (UNote note in notes) {
                 note.Validate(options, project, track, this);
             }
@@ -145,18 +178,8 @@ namespace OpenUtau.Core.Ustx {
                 var trackPhonemizers = new List<Phonemizer> { track.Phonemizer };
                 var notePhonemizerIndices = new List<int>();
 
-                int noteIndex = 0;
-                foreach (var note in notes) {
-                    if (note.OverlapError || note.Extends != null) {
-                        noteIndex++;
-                        continue;
-                    }
-                    var group = new List<UNote>() { note };
-                    var next = note.Next;
-                    while (next != null && next.Extends == note) {
-                        group.Add(next);
-                        next = next.Next;
-                    }
+                foreach (var (noteIndex, group) in Words()) {
+                    var note = group[0];
                     groups.Add(group.Select(e => e.ToPhonemizerNote(track, this)).ToArray());
                     noteIndexes.Add(noteIndex);
 
@@ -181,7 +204,6 @@ namespace OpenUtau.Core.Ustx {
                         }
                     }
                     notePhonemizerIndices.Add(pIndex);
-                    noteIndex++;
                 }
 
                 var request = new PhonemizerRequest() {
