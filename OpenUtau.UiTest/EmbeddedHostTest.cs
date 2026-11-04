@@ -587,6 +587,103 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        static string NoteEdit(UVoicePart part, IEnumerable<UNote> removed, params object[] after) => JsonSerializer.Serialize(new[] { new {
+            track = part.trackNo, group = EmbeddedNoteEdits.Id(part), offset = part.position,
+            before = removed.Select(n => new { position = n.position, duration = n.duration, tone = n.tone, lyric = n.lyric }),
+            after
+        } });
+
+        static void GiveDetails(UProject project, UNote note) {
+            note.pitch.data = new List<PitchPoint> { new PitchPoint(-40, 0), new PitchPoint(0, 12), new PitchPoint(10, -7) };
+            note.vibrato.length = 55;
+            note.tuning = 13;
+            note.phonemeExpressions.Add(new UExpression(project.expressions[Core.Format.Ustx.VEL]) { index = 0, value = 140 });
+            note.phonemeOverrides.Add(new UPhonemeOverride { index = 0, phoneme = "kept" });
+        }
+
+        static void AssertHasDetails(UNote note) {
+            Assert.Equal(new[] { (-40f, 0f), (0f, 12f), (10f, -7f) }, note.pitch.data.Select(p => (p.X, p.Y)));
+            Assert.Equal(55f, note.vibrato.length);
+            Assert.Equal(13, note.tuning);
+            var expression = Assert.Single(note.phonemeExpressions);
+            Assert.Equal(140f, expression.value);
+            Assert.NotNull(expression.descriptor);
+            Assert.Equal("kept", Assert.Single(note.phonemeOverrides).phoneme);
+        }
+
+        [Fact]
+        public void EmptiedPartTakesANewOrdinaryNote() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, pianoRoll => {
+                Assert.Equal("ok", EmbeddedNoteEdits.Apply(project, NoteEdit(first, first.notes.ToArray())));
+                Assert.Empty(first.notes);
+                Assert.Equal("ok", EmbeddedNoteEdits.Apply(project, NoteEdit(first, Array.Empty<UNote>(),
+                    new { position = 240, duration = 120, tone = 64, lyric = "new" })));
+                var made = Assert.Single(first.notes);
+                Assert.Equal(new[] { 240, 120, 64 }, new[] { made.position, made.duration, made.tone });
+                Assert.Equal(project.CreateNote().pitch.data.Select(p => (p.X, p.Y)), made.pitch.data.Select(p => (p.X, p.Y)));
+                project.ValidateFull();
+                HeadlessUi.Flush();
+            });
+        }
+
+        [Fact]
+        public void NewNoteAskedToCopyNothingTakesNothingFromTheNoteBesideIt() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, pianoRoll => {
+                var kept = first.notes.First();
+                GiveDetails(project, kept);
+                var request = NoteEdit(first, new[] { kept },
+                    new { position = kept.position, duration = kept.duration, tone = kept.tone, lyric = kept.lyric, from = 0 },
+                    new { position = 19000, duration = 120, tone = 64, lyric = "new", from = -1 });
+                Assert.Equal("ok", EmbeddedNoteEdits.Apply(project, request));
+                AssertHasDetails(first.notes.First());
+                var made = first.notes.Last();
+                Assert.Equal("new", made.lyric);
+                Assert.Equal(project.CreateNote().pitch.data.Select(p => (p.X, p.Y)), made.pitch.data.Select(p => (p.X, p.Y)));
+                Assert.Equal(0, made.tuning);
+                Assert.Empty(made.phonemeExpressions);
+                Assert.Empty(made.phonemeOverrides);
+            });
+        }
+
+        [Fact]
+        public void ReadStateBringsBackARemovedNotesDetailsAtItsNewPlace() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, pianoRoll => {
+                var note = first.notes.First();
+                GiveDetails(project, note);
+                using var read = JsonDocument.Parse(EmbeddedNoteEdits.Snapshot(project, statesOf: 0));
+                var state = read.RootElement.GetProperty("notes").EnumerateArray().First().GetProperty("state").GetString();
+                var position = note.position;
+                Assert.Equal("ok", EmbeddedNoteEdits.Apply(project, NoteEdit(first, new[] { note })));
+                Assert.Equal("ok", EmbeddedNoteEdits.Apply(project, NoteEdit(first, Array.Empty<UNote>(),
+                    new { position = position + 1, duration = 100, tone = 70, lyric = "back", state })));
+                var back = first.notes.First();
+                Assert.Equal(new[] { position + 1, 100, 70 }, new[] { back.position, back.duration, back.tone });
+                Assert.Equal("back", back.lyric);
+                AssertHasDetails(back);
+                project.ValidateFull();
+                HeadlessUi.Flush();
+                DocManager.Inst.Undo();
+                Assert.DoesNotContain(first.notes, n => n.lyric == "back");
+            });
+        }
+
+        [Theory]
+        [InlineData("{not: [closed")]
+        [InlineData("just words")]
+        [InlineData("position: 10")]
+        public void StateThatIsNoNoteRefusesTheBatch(string state) {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, pianoRoll => {
+                var notes = first.notes.ToArray();
+                Assert.Equal("bad-request", EmbeddedNoteEdits.Apply(project, NoteEdit(first, new[] { notes[0] },
+                    new { position = 19000, duration = 120, tone = 64, lyric = "new", state })));
+                Assert.Equal(notes, first.notes.ToArray());
+            });
+        }
+
         static void Seek(int tick) {
             DocManager.Inst.ExecuteCmd(new SeekPlayPosTickNotification(tick));
             HeadlessUi.Flush();
