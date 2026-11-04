@@ -34,7 +34,7 @@ using Serilog;
 
 namespace OpenUtau.App.Embedding {
     /// <summary>
-    /// Lets a native macOS or Linux application show OpenUtau's piano roll inside its own window.
+    /// Lets a native macOS, Linux or Windows application show OpenUtau's piano roll inside its own window.
     /// The application starts the .NET runtime with OpenUtau.dll as the app, then calls these
     /// entry points on its main thread. OpenUtau opens no windows of its own, except dialogs.
     /// </summary>
@@ -274,7 +274,8 @@ namespace OpenUtau.App.Embedding {
 
         /// <summary>Returns the view showing the piano roll, the same view each time, for the application to add to
         /// its own window. On macOS it is a retained NSView for the application's view hierarchy. On Linux it is the
-        /// X11 window of an XEmbed client, for an XEmbed embedder in the application's window to take.</summary>
+        /// X11 window of an XEmbed client, for an XEmbed embedder in the application's window to take. On Windows it is
+        /// a child HWND, for the application to give a parent.</summary>
         [UnmanagedCallersOnly]
         public static IntPtr CreateView() {
             IntPtr view = IntPtr.Zero;
@@ -286,8 +287,8 @@ namespace OpenUtau.App.Embedding {
                 if (ready) {
                     pianoRoll?.Focus();
                 }
-                view = plug != null
-                    ? plug.Handle
+                view = plug != null ? plug.Handle
+                    : OperatingSystem.IsWindows() ? top.TryGetPlatformHandle()!.Handle
                     : ((IMacOSTopLevelPlatformHandle)top.TryGetPlatformHandle()!).GetNSViewRetained();
             });
             return view;
@@ -310,7 +311,20 @@ namespace OpenUtau.App.Embedding {
         static EmbeddableControlRoot CreateRoot() {
             if (!OperatingSystem.IsLinux()) {
                 var embedded = new EmbeddableControlRoot();
-                if (embedded.TryGetPlatformHandle() is not IMacOSTopLevelPlatformHandle) {
+                if (OperatingSystem.IsWindows()) {
+                    if (embedded.TryGetPlatformHandle()?.Handle is null or 0) {
+                        throw new InvalidOperationException("No window for the embedded top level");
+                    }
+                    // Avalonia clears its focus when the window loses Windows's, and restores it only as a top-level
+                    // window activates, which a child window never does. It runs before the key or click that follows.
+                    Win32Properties.AddWndProcHookCallback(embedded, (IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam, ref bool handled) => {
+                        const uint gotFocus = 0x0007;
+                        if (message == gotFocus && ready && embedded.FocusManager?.GetFocusedElement() == null) {
+                            pianoRoll?.Focus();
+                        }
+                        return IntPtr.Zero;
+                    });
+                } else if (embedded.TryGetPlatformHandle() is not IMacOSTopLevelPlatformHandle) {
                     throw new InvalidOperationException("No NSView for the embedded top level");
                 }
                 return embedded;
@@ -327,7 +341,8 @@ namespace OpenUtau.App.Embedding {
         /// calls it on the main thread every few milliseconds, as from a timer. It returns once nothing above
         /// background work waits, or after 50 ms while X11 input keeps arriving. Jobs still run while no input waits,
         /// so a stream of them holds the application's main thread until it ends, as it would hold OpenUtau's own
-        /// loop. On macOS the application's run loop runs OpenUtau's, so the application never needs to call it.</summary>
+        /// loop. On macOS and Windows the application's run loop runs OpenUtau's, so the application never needs to call
+        /// it.</summary>
         [UnmanagedCallersOnly]
         public static int Pump() => Guard("pump", RunPending);
 
