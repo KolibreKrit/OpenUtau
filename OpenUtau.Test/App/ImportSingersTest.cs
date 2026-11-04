@@ -106,6 +106,28 @@ namespace OpenUtau.Test.App {
         }
 
         [Fact]
+        public void TheReportChecksAPartsFirstWordWithoutTheNoteInThePartBefore() {
+            var enToJa = PhonemizerFactory.Get(typeof(ENtoJAPhonemizer)).Id;
+            var project = Song("ah");
+            var second = new UVoicePart { trackNo = 0, position = 480 };
+            var note = project.CreateNote(64, 0, 480);
+            note.lyric = "to";
+            second.notes.Add(note);
+            project.parts.Add(second);
+            var aliases = new[] { "- あ", "a あ", "a と", "o う", "u R" };
+            Assert.Equal(new[] { "to" }, Choose(BankOf(aliases), project, "english", enToJa).unsung);
+        }
+
+        [Fact]
+        public void TheReportLeavesOutAPlusNoteWithNoWordToExtend() {
+            var enToJa = PhonemizerFactory.Get(typeof(ENtoJAPhonemizer)).Id;
+            var project = Song("hello", "+");
+            project.parts.OfType<UVoicePart>().Single().notes.Last().position += 480;
+            var (_, unsung) = Choose(Bank("ja_cv"), project, "english", enToJa);
+            Assert.DoesNotContain("+", unsung);
+        }
+
+        [Fact]
         public void TheReportSaysWhenATrackSingsItsClosestSoundsAndLeavesOutWhatIsNoWord() {
             var project = Song("hello", "-", "R", "br", "world");
             var (_, unsung) = Choose(Bank("ja_cv"), project, "english");
