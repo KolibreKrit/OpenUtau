@@ -654,6 +654,24 @@ namespace OpenUtau.App.Embedding {
         [UnmanagedCallersOnly]
         public static int ReadShownTrack() => pianoRoll?.ViewModel.NotesViewModel.Part?.trackNo ?? -1;
 
+        static IDisposable? renderHold;
+
+        // The menus open on a later dispatcher turn, so a host that presses a key in one reads this first.
+        [UnmanagedCallersOnly]
+        public static int ReadSingerMenuOpen() => TrackBar.SingerMenuOpen ? 1 : 0;
+
+        // A small edit can finish rendering before the host hears it began, so a host's check of what it does meanwhile
+        // keeps the render waiting.
+        [UnmanagedCallersOnly]
+        public static int HoldRenders(int held) => Guard("hold renders", () => {
+            if (held == 0) {
+                renderHold?.Dispose();
+                renderHold = null;
+            } else {
+                renderHold ??= PlaybackManager.Inst.HoldPreRender();
+            }
+        });
+
         [UnmanagedCallersOnly]
         public static int ShowAddSingerMenu() => Guard("show add singer menu", () => {
             ShowWhenUsable(() => {

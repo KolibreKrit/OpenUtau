@@ -141,8 +141,10 @@ namespace OpenUtau.UiTest {
         public void TheHostCanOpenATracksSingerMenu() {
             WithBar(Project(), (bar, _) => {
                 Assert.False(bar.ShowSingerMenu(9));
+                Assert.False(TrackBar.SingerMenuOpen);
                 Assert.True(bar.ShowSingerMenu(1));
                 HeadlessUi.Flush();
+                Assert.True(TrackBar.SingerMenuOpen);
                 Assert.Single(TopLevel.GetTopLevel(bar)!.GetVisualDescendants().OfType<SingerFlyout>());
             });
         }

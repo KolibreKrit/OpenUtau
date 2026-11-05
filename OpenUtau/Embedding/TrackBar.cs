@@ -181,6 +181,8 @@ namespace OpenUtau.App.Embedding {
             ShowPicker(new SingerFlyoutViewModel(() => header.Singer, header.SelectSingerCommand), anchor, Advanced(header, tab));
         }
 
+        public static bool SingerMenuOpen { get; private set; }
+
         static void ShowPicker(SingerFlyoutViewModel singers, Control anchor, Control? advanced = null) {
             try {
                 var content = new SingerFlyout { DataContext = singers };
@@ -199,8 +201,8 @@ namespace OpenUtau.App.Embedding {
                 flyout.Content = new DockPanel { Children = { footer, content } };
                 flyout.FlyoutPresenterClasses.Add("singerFlyout");
                 singers.CloseRequested += flyout.Hide;
-                flyout.Opened += (_, _) => DocManager.Inst.AddSubscriber(singers);
-                flyout.Closed += (_, _) => DocManager.Inst.RemoveSubscriber(singers);
+                flyout.Opened += (_, _) => { SingerMenuOpen = true; DocManager.Inst.AddSubscriber(singers); };
+                flyout.Closed += (_, _) => { SingerMenuOpen = false; DocManager.Inst.RemoveSubscriber(singers); };
                 content.FitToScreen(anchor);
                 flyout.ShowAt(anchor);
             } catch (Exception e) {
