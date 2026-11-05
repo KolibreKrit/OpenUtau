@@ -6,6 +6,35 @@ using Xunit;
 namespace OpenUtau.Test.App {
     public class EmbeddedNoteEditsTest {
         [Fact]
+        public void OffsetCommandsFindEachPhonemesFirstNoteByItsStart() {
+            var project = OpenUtau.Core.Format.Ustx.Create();
+            var part = new UVoicePart { trackNo = 0, position = 960 };
+            var note = project.CreateNote(60, 480, 480);
+            part.notes.Add(note);
+            project.parts.Add(part);
+            var commands = EmbeddedNoteEdits.OffsetCommands(project, "{\"track\":0,\"phonemes\":[{\"note\":1440,\"index\":1,\"offset\":-30}]}");
+            Assert.NotNull(commands);
+            commands!.ForEach(command => command.Execute());
+            Assert.Equal(-30, note.GetPhonemeOverride(1).offset);
+            commands.ForEach(command => command.Unexecute());
+            Assert.Null(note.GetPhonemeOverride(1).offset);
+        }
+
+        [Theory]
+        [InlineData("not json")]
+        [InlineData("{\"track\":0}")]
+        [InlineData("{\"track\":0,\"phonemes\":[{\"note\":1441,\"index\":0,\"offset\":5}]}")]
+        [InlineData("{\"track\":1,\"phonemes\":[{\"note\":1440,\"index\":0,\"offset\":5}]}")]
+        [InlineData("{\"track\":0,\"phonemes\":[{\"note\":1440,\"index\":-1,\"offset\":5}]}")]
+        public void OffsetCommandsRefuseARequestThatIsntForTheProjectsNotes(string request) {
+            var project = OpenUtau.Core.Format.Ustx.Create();
+            var part = new UVoicePart { trackNo = 0, position = 960 };
+            part.notes.Add(project.CreateNote(60, 480, 480));
+            project.parts.Add(part);
+            Assert.Null(EmbeddedNoteEdits.OffsetCommands(project, request));
+        }
+
+        [Fact]
         public void SnapshotGivesStatesOnlyWhenAskedAndOnlyForThatTrack() {
             var project = OpenUtau.Core.Format.Ustx.Create();
             project.tracks.Add(new UTrack(project) { TrackNo = 1 });
