@@ -762,6 +762,19 @@ namespace OpenUtau.App.Embedding {
             SendNoteText(function, context, result);
         });
 
+        /// <summary>Gives phonemes the offsets <see cref="EmbeddedNoteEdits.OffsetCommands"/> reads from the request, as
+        /// one step of OpenUtau's undo. Fails, changing nothing, when the request isn't that or OpenUtau isn't ready.</summary>
+        [UnmanagedCallersOnly]
+        public static int SetPhonemeOffsets(IntPtr request) => Guard("move phonemes", () => {
+            if (!Usable || !Dispatcher.UIThread.CheckAccess()) throw new InvalidOperationException("The piano roll isn't ready");
+            var commands = EmbeddedNoteEdits.OffsetCommands(DocManager.Inst.Project, Marshal.PtrToStringUTF8(request) ?? "")
+                ?? throw new ArgumentException("That isn't a request for this project's phonemes", nameof(request));
+            DocManager.Inst.StartUndoGroup("command.note.edit");
+            try {
+                foreach (var command in commands) DocManager.Inst.ExecuteCmd(command);
+            } finally { DocManager.Inst.EndUndoGroup(); }
+        });
+
         static void SendNoteText(IntPtr function, IntPtr context, string value) {
             var text = System.Text.Encoding.UTF8.GetBytes(value + "\0");
             var pinned = GCHandle.Alloc(text, GCHandleType.Pinned);

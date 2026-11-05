@@ -36,6 +36,30 @@ namespace OpenUtau.App.Embedding {
             notes = Enumerable.Range(0, project.tracks.Count).SelectMany(track =>
                 JsonSerializer.Deserialize<JsonElement[]>(Read(project, track, 0, int.MaxValue, selected, track == statesOf))!)
         });
+        public sealed record PhonemeOffset(int note, int index, int offset);
+        public sealed record PhonemeOffsets(int track, PhonemeOffset[] phonemes);
+        /// <summary>The commands that give phonemes of a track these offsets from where the phonemizer puts them. A
+        /// request reads <c>{"track":0,"phonemes":[{"note":1920,"index":0,"offset":-30}]}</c>, with each phoneme's word's
+        /// first note by its start, and its place there, as <see cref="EmbeddedNotes.PhonemesJson"/> gives them. Nothing
+        /// when the request isn't that, or a note isn't the track's.</summary>
+        public static List<PhonemeOffsetCommand>? OffsetCommands(UProject project, string request) {
+            PhonemeOffsets? offsets;
+            try { offsets = JsonSerializer.Deserialize<PhonemeOffsets>(request); }
+            catch (JsonException) { return null; }
+            if (offsets?.phonemes == null) return null;
+            var words = new Dictionary<int, (UVoicePart part, UNote note)>();
+            foreach (var part in EmbeddedNotes.VoiceParts(project, offsets.track)) {
+                foreach (var note in part.notes) {
+                    if (note.Extends == null) words.TryAdd(part.position + note.position, (part, note));
+                }
+            }
+            var commands = new List<PhonemeOffsetCommand>();
+            foreach (var phoneme in offsets.phonemes) {
+                if (phoneme.index < 0 || !words.TryGetValue(phoneme.note, out var word)) return null;
+                commands.Add(new PhonemeOffsetCommand(word.part, word.note, phoneme.index, phoneme.offset));
+            }
+            return commands;
+        }
         public sealed record Value(int position, int duration, int tone, string lyric, string phonemes = "", string group = "", int offset = 0, int from = 0, string? state = null);
         public sealed record Edit(int track, string group, int offset, Value[] before, Value[] after, Value[]? source);
         // A note added to its part can't be taken back, and validating it there throws on any of these.

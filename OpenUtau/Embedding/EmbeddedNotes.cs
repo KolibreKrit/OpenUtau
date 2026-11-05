@@ -97,10 +97,13 @@ namespace OpenUtau.App.Embedding {
         /// <summary>
         /// What OpenUtau sings, as UTF-8 JSON:
         /// <c>{"pending":false,"tracks":[{"index":0,"name":"Lead","pending":false,"notes":[{"tick":1920,
-        /// "duration":480,"tone":60,"lyric":"sing","phonemes":[{"symbol":"s","raw":"s","tick":1900}]}]}]}</c>.
-        /// Tracks come in project order and notes by start. <c>symbol</c> is what OpenUtau shows and sings, with
-        /// any phoneme the user typed over it; <c>raw</c> is what the phonemizer gave. A track is pending while
-        /// OpenUtau phonemizes any of its parts, when its phonemes may be out of date.
+        /// "duration":480,"tone":60,"lyric":"sing","phonemes":[{"symbol":"s","raw":"s","tick":1900,"rawTick":1910,
+        /// "word":1920,"index":0}]}]}]}</c>. Tracks come in project order and notes by start. <c>symbol</c> is what
+        /// OpenUtau shows and sings, with any phoneme the user typed over it; <c>raw</c> is what the phonemizer gave.
+        /// <c>rawTick</c> is where the phonemizer put it, before any offset, and <c>word</c> and <c>index</c> are its
+        /// word's first note, by its start, and its place there, which
+        /// <see cref="EmbeddedNoteEdits.OffsetCommands"/> takes. A track is pending while OpenUtau phonemizes any of
+        /// its parts, when its phonemes may be out of date, and <c>singer</c> says whether it has a voice to sing them.
         /// </summary>
         public static byte[] PhonemesJson(UProject? project) {
             using var stream = new MemoryStream();
@@ -117,6 +120,7 @@ namespace OpenUtau.App.Embedding {
                     json.WriteNumber("index", i);
                     json.WriteString("name", tracks[i].TrackName);
                     json.WriteBoolean("pending", parts.Any(p => !p.PhonemesUpToDate));
+                    json.WriteBoolean("singer", tracks[i].Singer?.Found == true);
                     json.WriteStartArray("notes");
                     var notes = parts.SelectMany(part => {
                         var phonemes = PhonemesByNote(part);
@@ -134,6 +138,9 @@ namespace OpenUtau.App.Embedding {
                             json.WriteString("symbol", phoneme.phoneme);
                             json.WriteString("raw", phoneme.rawPhoneme);
                             json.WriteNumber("tick", part.position + phoneme.position);
+                            json.WriteNumber("rawTick", part.position + phoneme.rawPosition);
+                            json.WriteNumber("word", part.position + phoneme.Parent.position);
+                            json.WriteNumber("index", phoneme.index);
                             json.WriteEndObject();
                         }
                         json.WriteEndArray();
