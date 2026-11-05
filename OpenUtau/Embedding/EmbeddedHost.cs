@@ -654,6 +654,10 @@ namespace OpenUtau.App.Embedding {
         [UnmanagedCallersOnly]
         public static int ReadShownTrack() => pianoRoll?.ViewModel.NotesViewModel.Part?.trackNo ?? -1;
 
+        // The menus open on a later dispatcher turn, so a host that presses a key in one reads this first.
+        [UnmanagedCallersOnly]
+        public static int ReadSingerMenuOpen() => TrackBar.SingerMenuOpen ? 1 : 0;
+
         [UnmanagedCallersOnly]
         public static int ShowAddSingerMenu() => Guard("show add singer menu", () => {
             ShowWhenUsable(() => {
