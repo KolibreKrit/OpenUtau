@@ -57,6 +57,20 @@ namespace OpenUtau.Test.App {
         }
 
         [Fact]
+        public void PhonemesJsonGivesEachNotesWord() {
+            var project = Project("Lead");
+            var la = Note(0, 480, 60, "la");
+            var plus = Note(480, 480, 62, "+");
+            plus.Extends = la;
+            Part(project, 0, 480, 960, la, plus);
+            Part(project, 0, 720, 240, Note(0, 120, 64, "oh"));
+            using var read = JsonDocument.Parse(EmbeddedNotes.PhonemesJson(project));
+            var notes = read.RootElement.GetProperty("tracks")[0].GetProperty("notes").EnumerateArray()
+                .Select(note => (note.GetProperty("tick").GetInt32(), note.GetProperty("word").GetInt32()));
+            Assert.Equal(new[] { (480, 480), (720, 720), (960, 480) }, notes);
+        }
+
+        [Fact]
         public void PartAtTakesThePartUnderTheTickOrTheLastBefore() {
             var project = Project("Lead", "Harmony");
             var first = Part(project, 0, 960, 960);
