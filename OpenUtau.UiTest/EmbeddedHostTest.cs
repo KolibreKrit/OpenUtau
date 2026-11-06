@@ -1073,6 +1073,25 @@ namespace OpenUtau.UiTest {
         }
 
         [Fact]
+        public void AMissingSingersNotesStaySilentInAHost() {
+            var project = Project(out var first, out _);
+            var preference = Core.Util.Preferences.Default.PlaySineWhenNoSinger;
+            try {
+                Core.Util.Preferences.Default.PlaySineWhenNoSinger = true;
+                EmbeddedHost.KeepSingerlessTracksSilent();
+                foreach (var track in project.tracks) track.RendererSettings.Validate(track);
+                WithPianoRoll(project, first, pianoRoll => {
+                    WaitForPhonemes(project);
+                    Assert.Null(project.tracks[0].RendererSettings.Renderer);
+                    Assert.Empty(RenderPhrase.FromPart(project, project.tracks[0], first));
+                });
+            } finally {
+                SineRenderer.Disabled = false;
+                Core.Util.Preferences.Default.PlaySineWhenNoSinger = preference;
+            }
+        }
+
+        [Fact]
         public void PartsAFailedRenderLeftAreFailedUntilTheNextPass() {
             var project = Renderable(Project(out var first, out _));
             WithPianoRoll(project, first, pianoRoll => {

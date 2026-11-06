@@ -43,8 +43,22 @@ namespace OpenUtau.Plugins {
         [Trait("Category", "General")]
         public void PhoneticHintTest() {
             RunPhonemizeTest("ja_vcv_integration",
-                [Note("あ", "cvvc"), Note("", "cvvc", "C4", "か"), Note("さ"), Note("し", "vcv", "C4", "- た"), Note("な", "vcv"), Note("R")],
-                ["- あ_CVVC_C4", "か_CVVC_C4", "a さ", "- た_VCV_D4", "a な_VCV_D4", "a R"]);
+                [Note("あ", "cvvc"), Note("", "cvvc", "C4", "- か"), Note("さ"), Note("し", "vcv", "C4", "- た"), Note("な", "vcv"), Note("R")],
+                ["- あ_CVVC_C4", "- か", "a さ", "- た_VCV_D4", "a な_VCV_D4", "a R"]);
+        }
+        [Fact]
+        [Trait("Category", "General")]
+        public void KanaHintJoinsAsItsLyricWouldTest() { // a kanji lyric, and a + note given its kana as phoneme input
+            RunPhonemizeTest("ja_vcv_integration",
+                [Note("夕", "", "C4", "あ"), Note("", "", "C4", "か"), Note("さ"), Note("焼", "", "C4", "た"), Note("R")],
+                ["- あ", "a か", "a さ", "a た", "a R"]);
+        }
+        [Fact]
+        [Trait("Category", "General")]
+        public void KanaHintGetsItsConsonantTest() { // CVVC puts a VC on the note before, which a hint used to stop
+            RunPhonemizeTest("ja_cvvc_integration",
+                [Note("夕", "", "C4", "か"), Note("焼", "", "C4", "さ"), Note("R")],
+                ["か", "a s", "さ", "a R"]);
         }
         [Fact]
         [Trait("Category", "General")]

@@ -26,6 +26,7 @@ using OpenUtau.App.Views;
 using OpenUtau.Audio;
 using OpenUtau.Classic;
 using OpenUtau.Core;
+using OpenUtau.Core.Render;
 using OpenUtau.Core.DawIntegration;
 using OpenUtau.Core.Ustx;
 using ReactiveUI;
@@ -172,6 +173,9 @@ namespace OpenUtau.App.Embedding {
             }
         }
 
+        // The application says which track needs a singer, so its notes need no sound in the mix.
+        public static void KeepSingerlessTracksSilent() => SineRenderer.Disabled = true;
+
         /// <summary>Starts Avalonia and OpenUtau without any OpenUtau window. A null data path
         /// uses OpenUtau's usual data folder. On Linux, Avalonia runs on X11, and its events wait for
         /// <see cref="Pump"/>.</summary>
@@ -184,6 +188,7 @@ namespace OpenUtau.App.Embedding {
             // the WebGPU plugin's can't be caught. The runner chosen in the preferences, which the standalone OpenUtau
             // may share, is left as it is. Set before anything reads the preferences, which would register the plugin.
             Onnx.RunnerOverride = "CPU";
+            KeepSingerlessTracksSilent();
             Program.InitLogging();
             Log.Information($"Embedded OpenUtau. Data path = {PathManager.Inst.DataPath}");
             App.Embedded = true;

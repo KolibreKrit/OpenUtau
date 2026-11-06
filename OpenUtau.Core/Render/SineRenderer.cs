@@ -22,6 +22,10 @@ namespace OpenUtau.Core.Render {
             Format.Ustx.PITD,
         };
 
+        // An embedding host says when a track needs a singer rather than sounding it. The preference, which the standalone
+        // OpenUtau may share, is left as it is.
+        public static bool Disabled { get; set; }
+
         SineRenderer() { }
 
         public static bool IsFallbackActive(UTrack track) {
@@ -29,7 +33,7 @@ namespace OpenUtau.Core.Render {
         }
 
         public static IRenderer RendererFor(UTrack track) {
-            return IsFallbackActive(track) && Preferences.Default.PlaySineWhenNoSinger ? Instance : null;
+            return IsFallbackActive(track) && !Disabled && Preferences.Default.PlaySineWhenNoSinger ? Instance : null;
         }
 
         public USingerType SingerType => USingerType.Classic;
