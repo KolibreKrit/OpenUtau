@@ -85,7 +85,9 @@ namespace OpenUtau.Plugin.Builtin {
             var result = new List<Phoneme>();
             bool preCFlag = false;
 
-            var note = notes[0];
+            var note = WithKanaHintAsLyric(notes[0]);
+            prevNeighbour = prevNeighbour == null ? null : WithKanaHintAsLyric(prevNeighbour.Value);
+            nextNeighbour = nextNeighbour == null ? null : WithKanaHintAsLyric(nextNeighbour.Value);
             var currentLyric = ParseLyricFromNote(note);
             var currentAlias = ParseAliasFromLyric(currentLyric); // exclude useless characters
             var vcvpad = presamp.AliasRules.VCVPAD;
@@ -418,6 +420,21 @@ namespace OpenUtau.Plugin.Builtin {
                 }
             }
             return false;
+        }
+
+        // SVCoverEditor keeps a note's kanji lyric and hints its kana, and hints the kana of a SynthV + note, so these
+        // join to their neighbours as kana lyrics do. A hint with a pad, such as "- か", still names its alias.
+        private Note WithKanaHintAsLyric(Note note) {
+            if (string.IsNullOrEmpty(note.phoneticHint)) {
+                return note;
+            }
+            var hint = note.phoneticHint.Normalize();
+            if (!Regex.IsMatch(hint, @"^[\p{IsHiragana}\p{IsKatakana}]+$") || !presamp.PhonemeList.ContainsKey(hint)) {
+                return note;
+            }
+            note.lyric = hint;
+            note.phoneticHint = null;
+            return note;
         }
 
         private string ParseLyricFromNote(Note note) {
