@@ -567,6 +567,7 @@ namespace OpenUtau.App.Embedding {
             for (int i = 0; i < loaded.tracks.Count; ++i) {
                 DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(first + i, true));
             }
+            EmbeddedMix.TracksChanged();
             Log.Information($"Embedded OpenUtau added {loaded.tracks.Count} tracks from {source} as {loaded.tracks[0].TrackName}");
             return loaded.tracks[0];
         }
@@ -691,6 +692,7 @@ namespace OpenUtau.App.Embedding {
             } finally {
                 DocManager.Inst.EndUndoGroup();
             }
+            EmbeddedMix.TracksChanged();
             Log.Information($"Embedded OpenUtau removed track {track.TrackName}, saved as {destination}");
         }
 

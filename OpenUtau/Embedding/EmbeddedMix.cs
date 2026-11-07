@@ -103,6 +103,13 @@ namespace OpenUtau.App.Embedding {
             }
         }
 
+        /// <summary>Sends a snapshot soon even if it reads as the last one did. The application waits for one taken after
+        /// it changes a track.</summary>
+        public static void TracksChanged() {
+            lastSent = null;
+            Schedule();
+        }
+
         static void Send() {
             scheduled = false;
             // The project being opened sends its first snapshot once it has, so none tells of the last one meanwhile.

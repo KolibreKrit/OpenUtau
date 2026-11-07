@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using Avalonia.Media;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -1435,6 +1436,44 @@ namespace OpenUtau.UiTest {
         public void ATrackPutBackKeepsItsNameWhenATrackHasIt() => WithTracks((project, _, folder) => {
             Assert.Equal("Lead", EmbeddedHost.AddTracksNamed(HarmonyCopy(folder), "Lead").TrackName);
             Assert.Equal(2, project.tracks.Count(t => t.TrackName == "Lead"));
+        });
+
+        // The application waits for a snapshot taken after it changes a track, and this one reads as the last one did.
+        [Fact]
+        public void ASnapshotFollowsATrackPutBackAsItWas() => WithTracks((project, _, folder) => {
+            var ready = typeof(EmbeddedHost).GetField("ready", BindingFlags.NonPublic | BindingFlags.Static)!;
+            var told = new List<string>();
+            bool Heard(int count) {
+                var until = DateTime.UtcNow.AddSeconds(2);
+                while (told.Count < count && DateTime.UtcNow < until) {
+                    HeadlessUi.Flush();
+                    Thread.Sleep(10);
+                }
+                return told.Count >= count;
+            }
+            // With nothing to render, no snapshot comes for a render, and the track put back reads the same.
+            DocManager.Inst.StartUndoGroup("test");
+            foreach (var part in project.parts.ToList()) {
+                DocManager.Inst.ExecuteCmd(new RemovePartCommand(project, part));
+            }
+            DocManager.Inst.EndUndoGroup();
+            ready.SetValue(null, true);
+            try {
+                EmbeddedMix.Listen(told.Add);
+                Assert.True(Heard(1));
+                // Once the wait between songs is over the next snapshot is posted, not left to a timer, which only a main loop runs.
+                Thread.Sleep(150);
+
+                var path = Path.Combine(folder, "harmony.ustx");
+                Assert.NotNull(EmbeddedHost.SaveAndRemoveNumbered(1, path));
+                EmbeddedHost.AddTracksNamed(path, "Harmony");
+
+                Assert.True(Heard(2));
+                Assert.Equal(told[0], told[1]);
+            } finally {
+                EmbeddedMix.Listen(null);
+                ready.SetValue(null, false);
+            }
         });
 
         // The application removes an added track by its ID, so a rename doesn't lose it, and a track that takes its
