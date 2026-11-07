@@ -1369,6 +1369,25 @@ namespace OpenUtau.UiTest {
         });
 
         [Fact]
+        public void ATrackTheProjectOpenedWithIsRemovedByItsNumber() => WithTracks((project, _, folder) => {
+            var removed = Path.Combine(folder, "harmony.ustx");
+            var track = EmbeddedHost.SaveAndRemoveNumbered(1, removed);
+            Assert.Equal("Harmony", track?.TrackName);
+            Assert.Equal(new[] { "Lead" }, project.tracks.Select(t => t.TrackName));
+            Assert.Equal(new[] { "Harmony" }, Core.Format.Ustx.Read(removed).tracks.Select(t => t.TrackName));
+        });
+
+        [Theory]
+        [InlineData(-1)]
+        [InlineData(2)]
+        public void ANumberWithNoTrackRemovesNothing(int number) => WithTracks((project, _, folder) => {
+            var removed = Path.Combine(folder, "none.ustx");
+            Assert.Null(EmbeddedHost.SaveAndRemoveNumbered(number, removed));
+            Assert.Equal(new[] { "Lead", "Harmony" }, project.tracks.Select(t => t.TrackName));
+            Assert.False(File.Exists(removed));
+        });
+
+        [Fact]
         public void ARemovedTrackIsSavedAloneAndAddsBackAsItWas() => WithTracks((project, first, folder) => {
             var removed = Path.Combine(folder, "lead.ustx");
             EmbeddedHost.SaveAndRemove(project.tracks[0], removed);

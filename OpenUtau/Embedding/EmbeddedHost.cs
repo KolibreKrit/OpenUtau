@@ -614,6 +614,35 @@ namespace OpenUtau.App.Embedding {
             }
         });
 
+        /// <summary>As <see cref="RemoveAddedTrack"/>, for the open project's track at the number, whichever way it got
+        /// there: a part's singer may come from the project the app opened. Does nothing, and calls nothing, when the open
+        /// project has no track at the number.</summary>
+        [UnmanagedCallersOnly]
+        public static int RemoveTrackNumbered(int trackNo, IntPtr destination, IntPtr function, IntPtr context) => Guard("remove track", () => {
+            if (function == IntPtr.Zero) {
+                throw new ArgumentNullException(nameof(function));
+            }
+            if (!Usable) {
+                throw new InvalidOperationException("No project is open to remove a track from");
+            }
+            var path = Utf8(destination) ?? throw new ArgumentNullException(nameof(destination));
+            if (SaveAndRemoveNumbered(trackNo, path) is UTrack track) {
+                Report(function, context, track, trackNo);
+            }
+        });
+
+        /// <summary>The managed part of <see cref="RemoveTrackNumbered"/>. Gives the track it removed, or null when the
+        /// open project has no track at the number.</summary>
+        public static UTrack? SaveAndRemoveNumbered(int trackNo, string destination) {
+            var tracks = DocManager.Inst.Project.tracks;
+            if (trackNo < 0 || trackNo >= tracks.Count) {
+                return null;
+            }
+            var track = tracks[trackNo];
+            SaveAndRemove(track, destination);
+            return track;
+        }
+
         /// <summary>The managed part of <see cref="RemoveAddedTrack"/>, for a track of the open project.</summary>
         public static void SaveAndRemove(UTrack track, string destination) {
             var project = DocManager.Inst.Project;
