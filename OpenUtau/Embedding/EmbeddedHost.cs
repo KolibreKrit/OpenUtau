@@ -511,8 +511,26 @@ namespace OpenUtau.App.Embedding {
             Report(function, context, added, added.TrackNo);
         });
 
+        /// <summary>As <see cref="AddTrackFrom"/>, and the first track takes the name given even when a track has it. The
+        /// application knows a track by its name and voice, so a track it takes out and puts back keeps its name.</summary>
+        [UnmanagedCallersOnly]
+        public static int AddTrackNamed(IntPtr source, IntPtr name, IntPtr function, IntPtr context) => Guard("add track", () => {
+            if (function == IntPtr.Zero) {
+                throw new ArgumentNullException(nameof(function));
+            }
+            if (!Usable) {
+                throw new InvalidOperationException("No project is open to add tracks to");
+            }
+            var added = AddTracksNamed(Utf8(source) ?? throw new ArgumentNullException(nameof(source)),
+                Utf8(name) ?? throw new ArgumentNullException(nameof(name)));
+            Report(function, context, added, added.TrackNo);
+        });
+
         /// <summary>The managed part of <see cref="AddTrackFrom"/>. Returns the first track added.</summary>
-        public static UTrack AddTracks(string source, string name) {
+        public static UTrack AddTracks(string source, string name) => AddTracksNamed(source, UnusedName(DocManager.Inst.Project, name));
+
+        /// <summary>The managed part of <see cref="AddTrackNamed"/>. Returns the first track added.</summary>
+        public static UTrack AddTracksNamed(string source, string name) {
             var project = DocManager.Inst.Project;
             // As for Import, the tracks' singers may still be being searched for.
             Task.WhenAny(loading).Wait();
@@ -525,7 +543,7 @@ namespace OpenUtau.App.Embedding {
                 project.expressions.TryAdd(abbr, descriptor);
             }
             int first = project.tracks.Count;
-            loaded.tracks[0].TrackName = UnusedName(project, name);
+            loaded.tracks[0].TrackName = name;
             DocManager.Inst.StartUndoGroup("command.import.track");
             try {
                 for (int i = 0; i < loaded.tracks.Count; ++i) {

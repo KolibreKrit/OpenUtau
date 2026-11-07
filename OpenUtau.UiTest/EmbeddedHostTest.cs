@@ -1431,6 +1431,12 @@ namespace OpenUtau.UiTest {
             Assert.Equal("Verse", EmbeddedHost.AddTracks(source, "Verse").TrackName);
         });
 
+        [Fact]
+        public void ATrackPutBackKeepsItsNameWhenATrackHasIt() => WithTracks((project, _, folder) => {
+            Assert.Equal("Lead", EmbeddedHost.AddTracksNamed(HarmonyCopy(folder), "Lead").TrackName);
+            Assert.Equal(2, project.tracks.Count(t => t.TrackName == "Lead"));
+        });
+
         // The application removes an added track by its ID, so a rename doesn't lose it, and a track that takes its
         // old name isn't taken for it.
         [Fact]
