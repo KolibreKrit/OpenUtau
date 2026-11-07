@@ -511,8 +511,26 @@ namespace OpenUtau.App.Embedding {
             Report(function, context, added, added.TrackNo);
         });
 
+        /// <summary>As <see cref="AddTrackFrom"/>, and the first track takes the name given even when a track has it. The
+        /// application knows a track by its name and voice, so a track it takes out and puts back keeps its name.</summary>
+        [UnmanagedCallersOnly]
+        public static int AddTrackNamed(IntPtr source, IntPtr name, IntPtr function, IntPtr context) => Guard("add track", () => {
+            if (function == IntPtr.Zero) {
+                throw new ArgumentNullException(nameof(function));
+            }
+            if (!Usable) {
+                throw new InvalidOperationException("No project is open to add tracks to");
+            }
+            var added = AddTracksNamed(Utf8(source) ?? throw new ArgumentNullException(nameof(source)),
+                Utf8(name) ?? throw new ArgumentNullException(nameof(name)));
+            Report(function, context, added, added.TrackNo);
+        });
+
         /// <summary>The managed part of <see cref="AddTrackFrom"/>. Returns the first track added.</summary>
-        public static UTrack AddTracks(string source, string name) {
+        public static UTrack AddTracks(string source, string name) => AddTracksNamed(source, UnusedName(DocManager.Inst.Project, name));
+
+        /// <summary>The managed part of <see cref="AddTrackNamed"/>. Returns the first track added.</summary>
+        public static UTrack AddTracksNamed(string source, string name) {
             var project = DocManager.Inst.Project;
             // As for Import, the tracks' singers may still be being searched for.
             Task.WhenAny(loading).Wait();
@@ -525,7 +543,7 @@ namespace OpenUtau.App.Embedding {
                 project.expressions.TryAdd(abbr, descriptor);
             }
             int first = project.tracks.Count;
-            loaded.tracks[0].TrackName = UnusedName(project, name);
+            loaded.tracks[0].TrackName = name;
             DocManager.Inst.StartUndoGroup("command.import.track");
             try {
                 for (int i = 0; i < loaded.tracks.Count; ++i) {
@@ -549,6 +567,7 @@ namespace OpenUtau.App.Embedding {
             for (int i = 0; i < loaded.tracks.Count; ++i) {
                 DocManager.Inst.ExecuteCmd(new VoiceColorRemappingNotification(first + i, true));
             }
+            EmbeddedMix.TracksChanged();
             Log.Information($"Embedded OpenUtau added {loaded.tracks.Count} tracks from {source} as {loaded.tracks[0].TrackName}");
             return loaded.tracks[0];
         }
@@ -614,6 +633,35 @@ namespace OpenUtau.App.Embedding {
             }
         });
 
+        /// <summary>As <see cref="RemoveAddedTrack"/>, for the open project's track at the number, whichever way it got
+        /// there: a part's singer may come from the project the app opened. Does nothing, and calls nothing, when the open
+        /// project has no track at the number.</summary>
+        [UnmanagedCallersOnly]
+        public static int RemoveTrackNumbered(int trackNo, IntPtr destination, IntPtr function, IntPtr context) => Guard("remove track", () => {
+            if (function == IntPtr.Zero) {
+                throw new ArgumentNullException(nameof(function));
+            }
+            if (!Usable) {
+                throw new InvalidOperationException("No project is open to remove a track from");
+            }
+            var path = Utf8(destination) ?? throw new ArgumentNullException(nameof(destination));
+            if (SaveAndRemoveNumbered(trackNo, path) is UTrack track) {
+                Report(function, context, track, trackNo);
+            }
+        });
+
+        /// <summary>The managed part of <see cref="RemoveTrackNumbered"/>. Gives the track it removed, or null when the
+        /// open project has no track at the number.</summary>
+        public static UTrack? SaveAndRemoveNumbered(int trackNo, string destination) {
+            var tracks = DocManager.Inst.Project.tracks;
+            if (trackNo < 0 || trackNo >= tracks.Count) {
+                return null;
+            }
+            var track = tracks[trackNo];
+            SaveAndRemove(track, destination);
+            return track;
+        }
+
         /// <summary>The managed part of <see cref="RemoveAddedTrack"/>, for a track of the open project.</summary>
         public static void SaveAndRemove(UTrack track, string destination) {
             var project = DocManager.Inst.Project;
@@ -644,6 +692,7 @@ namespace OpenUtau.App.Embedding {
             } finally {
                 DocManager.Inst.EndUndoGroup();
             }
+            EmbeddedMix.TracksChanged();
             Log.Information($"Embedded OpenUtau removed track {track.TrackName}, saved as {destination}");
         }
 
