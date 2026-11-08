@@ -116,6 +116,16 @@ namespace OpenUtau.Test.App {
         }
 
         [Fact]
+        public void SnapshotWithStatesSaysACurveWithoutPointsWasNotDrawnEvenUnmarked() {
+            var project = OpenUtau.Core.Format.Ustx.Create();
+            project.parts.Add(new UVoicePart { trackNo = 0, position = 0 });
+            var part = new UVoicePart { trackNo = 0, position = 960 };
+            part.curves.Add(new UCurve(project.expressions[OpenUtau.Core.Format.Ustx.PITD]));
+            project.parts.Add(part);
+            Assert.Equal(new[] { false, false }, Drawn(project, 0));
+        }
+
+        [Fact]
         public void SnapshotWithStatesSaysWhichNotesHaveTheirOwnTransitionsOrVibrato() {
             var project = OpenUtau.Core.Format.Ustx.Create();
             var part = new UVoicePart { trackNo = 0, position = 0 };

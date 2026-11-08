@@ -68,8 +68,11 @@ namespace OpenUtau.App.Embedding {
             var curve = part.curves.FirstOrDefault(c => c.abbr == Core.Format.Ustx.PITD);
             var xs = curve?.xs ?? new List<int>();
             var ys = curve?.ys ?? new List<int>();
-            return new { xs, ys, drawn = part.hostPitch != PitchMark(xs, ys) };
+            return new { xs, ys, drawn = !HostsPitch(part, xs, ys) };
         }
+        // Whether a part's curve is the one the host's import or edits left, or has no points, so nothing drawn on it.
+        static bool HostsPitch(UVoicePart part, IReadOnlyList<int> xs, IReadOnlyList<int> ys)
+            => xs.Count == 0 || part.hostPitch == PitchMark(xs, ys);
         // A part's pitch deviation curve as UVoicePart.hostPitch marks it.
         static string PitchMark(IReadOnlyList<int> xs, IReadOnlyList<int> ys) {
             var mark = 14695981039346656037UL;
@@ -89,13 +92,13 @@ namespace OpenUtau.App.Embedding {
                 part.hostPitch = PitchMark(curve?.xs ?? new List<int>(), curve?.ys ?? new List<int>());
             }
         }
-        // The host's change to a part's curve also moves the part's mark of it, if the part still had the host's curve.
+        // The host's change to a part's curve also moves the part's mark of it, if the part had the host's curve or none.
         sealed class HostPitchCommand : MergedSetCurveCommand {
             readonly string? oldMark, newMark;
             public HostPitchCommand(UProject project, UVoicePart part, int[] oldXs, int[] oldYs, int[] newXs, int[] newYs)
                 : base(project, part, Core.Format.Ustx.PITD, oldXs, oldYs, newXs, newYs) {
                 oldMark = part.hostPitch;
-                newMark = oldMark == PitchMark(oldXs, oldYs) ? PitchMark(newXs, newYs) : oldMark;
+                newMark = HostsPitch(part, oldXs, oldYs) ? PitchMark(newXs, newYs) : oldMark;
             }
             public override void Execute() { base.Execute(); Part.hostPitch = newMark; }
             public override void Unexecute() { base.Unexecute(); Part.hostPitch = oldMark; }

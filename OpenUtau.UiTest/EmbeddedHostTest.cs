@@ -795,6 +795,28 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        [Fact]
+        public void PitchSpanOnAnUnmarkedPartWithoutPointsLeavesItTheHostsThroughUndo() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, pianoRoll => {
+                string Span(int y) => JsonSerializer.Serialize(new[] { new {
+                    track = 0, group = EmbeddedNoteEdits.Id(first), offset = first.position,
+                    before = Array.Empty<object>(), after = Array.Empty<object>(),
+                    pitch = new[] { new { from = 400, to = 600, xs = new[] { 400, 600 }, ys = new[] { y, y } } }
+                } });
+                Assert.False(Drawn(project, first));
+                Assert.Equal("ok", EmbeddedNoteEdits.Apply(project, Span(200)));
+                Assert.False(Drawn(project, first));
+                Assert.Equal("ok", EmbeddedNoteEdits.Apply(project, Span(100)));
+                Assert.False(Drawn(project, first));
+                DocManager.Inst.Undo();
+                DocManager.Inst.Undo();
+                Assert.False(Drawn(project, first));
+                DocManager.Inst.Redo();
+                Assert.False(Drawn(project, first));
+            });
+        }
+
         static bool Drawn(UProject project, UVoicePart part) {
             using var read = JsonDocument.Parse(EmbeddedNoteEdits.Snapshot(project, statesOf: part.trackNo));
             return read.RootElement.GetProperty("references").EnumerateArray().Single(r => r.GetProperty("group").GetString() == EmbeddedNoteEdits.Id(part))
