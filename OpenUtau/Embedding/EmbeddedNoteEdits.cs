@@ -27,15 +27,17 @@ namespace OpenUtau.App.Embedding {
                     state = states ? Yaml.DefaultSerializer.Serialize(note) : null
                 });
             }).Where(n => n.offset + n.position >= from && n.offset + n.position < to), skipNull);
+        // With states, each part of that track also gives its pitch deviation curve, which a pitch span can bring back.
         public static string Snapshot(UProject project, Func<UNote, bool>? selected = null, int? statesOf = null) => JsonSerializer.Serialize(new {
             tracks = project.tracks.Select(t => t.TrackName),
             references = Enumerable.Range(0, project.tracks.Count).SelectMany(track =>
                 EmbeddedNotes.VoiceParts(project, track).Select((part, reference) => new {
-                    track, reference, group = Id(part), offset = part.position, muted = project.tracks[track].Mute
+                    track, reference, group = Id(part), offset = part.position, muted = project.tracks[track].Mute,
+                    pitch = track == statesOf ? PitchOf(part) : null
                 })),
             notes = Enumerable.Range(0, project.tracks.Count).SelectMany(track =>
                 JsonSerializer.Deserialize<JsonElement[]>(Read(project, track, 0, int.MaxValue, selected, track == statesOf))!)
-        });
+        }, skipNull);
         public sealed record PhonemeOffset(int note, int index, int offset);
         public sealed record PhonemeOffsets(int track, PhonemeOffset[] phonemes);
         /// <summary>The commands that give phonemes of a track these offsets from where the phonemizer puts them. A
@@ -60,8 +62,29 @@ namespace OpenUtau.App.Embedding {
             }
             return commands;
         }
+        static object PitchOf(UVoicePart part) {
+            var curve = part.curves.FirstOrDefault(c => c.abbr == Core.Format.Ustx.PITD);
+            return new { xs = curve?.xs ?? new List<int>(), ys = curve?.ys ?? new List<int>() };
+        }
         public sealed record Value(int position, int duration, int tone, string lyric, string phonemes = "", string group = "", int offset = 0, int from = 0, string? state = null);
-        public sealed record Edit(int track, string group, int offset, Value[] before, Value[] after, Value[]? source);
+        // The part's pitch deviation from one of its ticks to another, both included, becomes these points, in ticks from the
+        // part's start and cents.
+        public sealed record PitchSpan(int from, int to, int[] xs, int[] ys);
+        public sealed record Edit(int track, string group, int offset, Value[] before, Value[] after, Value[]? source, PitchSpan[]? pitch = null);
+        static bool Whole(PitchSpan? span) => span?.xs != null && span.ys != null && span.from <= span.to && span.xs.Length == span.ys.Length
+            && span.xs.All(x => x >= span.from && x <= span.to) && span.xs.Zip(span.xs.Skip(1)).All(p => p.First < p.Second);
+        static MergedSetCurveCommand? PitchCommand(UProject project, UVoicePart part, PitchSpan[] spans) {
+            if (spans.Length == 0 || !project.expressions.TryGetValue(Core.Format.Ustx.PITD, out var limits)) return null;
+            var curve = part.curves.FirstOrDefault(c => c.abbr == Core.Format.Ustx.PITD);
+            var points = (curve?.xs ?? new List<int>()).Zip(curve?.ys ?? new List<int>()).ToList();
+            foreach (var span in spans) {
+                points.RemoveAll(p => p.First >= span.from && p.First <= span.to);
+                points.AddRange(span.xs.Zip(span.ys.Select(y => Math.Clamp(y, (int)limits.min, (int)limits.max))));
+            }
+            points.Sort((a, b) => a.First.CompareTo(b.First));
+            return new MergedSetCurveCommand(project, part, Core.Format.Ustx.PITD, curve?.xs.ToArray() ?? Array.Empty<int>(), curve?.ys.ToArray() ?? Array.Empty<int>(),
+                points.Select(p => p.First).ToArray(), points.Select(p => p.Second).ToArray());
+        }
         // A note added to its part can't be taken back, and validating it there throws on any of these.
         static bool Whole(UNote? note) => note?.pitch?.data != null && note.pitch.data.Count > 0 && !note.pitch.data.Contains(null!)
             && note.vibrato != null && note.phonemeOverrides != null && !note.phonemeOverrides.Contains(null!)
@@ -71,14 +94,15 @@ namespace OpenUtau.App.Embedding {
             try { batch = JsonSerializer.Deserialize<Edit[]>(edits); }
             catch (JsonException) { return "bad-request"; }
             if (batch == null || batch.Length == 0 || batch.Length > 256) return "bad-request";
-            var plans = new List<(UVoicePart part, List<UNote> before, List<UNote> after)>();
+            var plans = new List<(UVoicePart part, List<UNote> before, List<UNote> after, PitchSpan[] pitch)>();
             var used = new HashSet<UNote>();
             bool same(UNote note, Value value) => note.position == value.position && note.duration == value.duration
                 && note.tone == value.tone && note.lyric == value.lyric && string.IsNullOrEmpty(value.phonemes);
             foreach (var edit in batch) {
                 var part = project.parts.OfType<UVoicePart>().FirstOrDefault(p => Id(p) == edit.group && p.trackNo == edit.track);
                 if (part == null || part.position != edit.offset) return "changed";
-                if (edit.before == null || edit.after == null || edit.before.Length > 4096 || edit.after.Length > 4096) return "bad-request";
+                if (edit.before == null || edit.after == null || edit.before.Length > 4096 || edit.after.Length > 4096
+                    || edit.pitch?.All(Whole) == false) return "bad-request";
                 var before = new List<UNote>();
                 foreach (var value in edit.before) {
                     var found = part.notes.Where(n => same(n, value)).ToList();
@@ -110,7 +134,7 @@ namespace OpenUtau.App.Embedding {
                         || after.Any(n => n.position < note.End && note.position < n.End)) return "occupied";
                     after.Add(note);
                 }
-                plans.Add((part, before, after));
+                plans.Add((part, before, after, edit.pitch ?? Array.Empty<PitchSpan>()));
             }
             foreach (var together in plans.GroupBy(p => p.part)) {
                 var notes = together.SelectMany(p => p.after).OrderBy(n => n.position).ToArray();
@@ -120,9 +144,10 @@ namespace OpenUtau.App.Embedding {
             }
             DocManager.Inst.StartUndoGroup("command.note.lyric");
             try {
-                foreach (var (part, before, after) in plans) {
+                foreach (var (part, before, after, pitch) in plans) {
                     if (before.Count > 0) DocManager.Inst.ExecuteCmd(new RemoveNoteCommand(part, before));
                     if (after.Count > 0) DocManager.Inst.ExecuteCmd(new AddNoteCommand(part, after.OrderBy(n => n.position).ToList()));
+                    if (PitchCommand(project, part, pitch) is { } curve) DocManager.Inst.ExecuteCmd(curve);
                 }
             } finally { DocManager.Inst.EndUndoGroup(); }
             return "ok";

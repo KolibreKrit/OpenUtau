@@ -694,6 +694,89 @@ namespace OpenUtau.UiTest {
             });
         }
 
+        static UCurve PitchCurve(UProject project, UVoicePart part, int from, int to, int y) {
+            var curve = new UCurve(project.expressions[Core.Format.Ustx.PITD]);
+            for (var x = from; x <= to; x += 5) {
+                curve.xs.Add(x);
+                curve.ys.Add(y);
+            }
+            part.curves.Add(curve);
+            return curve;
+        }
+
+        static (int x, int y)[] Points(UVoicePart part) {
+            var curve = part.curves.FirstOrDefault(c => c.abbr == Core.Format.Ustx.PITD);
+            return curve == null ? Array.Empty<(int, int)>() : curve.xs.Zip(curve.ys).ToArray();
+        }
+
+        [Fact]
+        public void PitchSpanReplacesThePartsCurveThereAloneAndOneUndoBringsItBackWithTheNote() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, pianoRoll => {
+                PitchCurve(project, first, 0, 1915, 7);
+                var was = Points(first);
+                var note = first.notes.ElementAt(1);
+                var request = JsonSerializer.Serialize(new[] { new {
+                    track = 0, group = EmbeddedNoteEdits.Id(first), offset = first.position,
+                    before = new[] { new { position = note.position, duration = note.duration, tone = note.tone, lyric = note.lyric } },
+                    after = new[] { new { position = note.position, duration = note.duration, tone = note.tone + 2, lyric = note.lyric, from = 0 } },
+                    pitch = new[] { new { from = 400, to = 600, xs = new[] { 400, 500, 600 }, ys = new[] { 100, 120, 140 } } }
+                } });
+                Assert.Equal("ok", EmbeddedNoteEdits.Apply(project, request));
+                Assert.Equal(note.tone + 2, first.notes.ElementAt(1).tone);
+                var expected = was.Where(p => p.x < 400).Concat(new[] { (400, 100), (500, 120), (600, 140) }).Concat(was.Where(p => p.x > 600));
+                Assert.Equal(expected, Points(first));
+                DocManager.Inst.Undo();
+                Assert.Equal(note.tone, first.notes.ElementAt(1).tone);
+                Assert.Equal(was, Points(first));
+            });
+        }
+
+        [Fact]
+        public void PitchSpanAloneGivesAPartWithoutACurveOneWithinItsLimitsAndLeavesItsNotes() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, pianoRoll => {
+                var notes = first.notes.ToArray();
+                var request = JsonSerializer.Serialize(new[] { new {
+                    track = 0, group = EmbeddedNoteEdits.Id(first), offset = first.position,
+                    before = Array.Empty<object>(), after = Array.Empty<object>(),
+                    pitch = new[] { new { from = 0, to = 10, xs = new[] { 0, 5, 10 }, ys = new[] { -5000, 30, 5000 } } }
+                } });
+                Assert.Equal("ok", EmbeddedNoteEdits.Apply(project, request));
+                Assert.Equal(notes, first.notes.ToArray());
+                var limits = project.expressions[Core.Format.Ustx.PITD];
+                Assert.Equal(new[] { (0, (int)limits.min), (5, 30), (10, (int)limits.max) }, Points(first));
+                DocManager.Inst.Undo();
+                Assert.Empty(Points(first));
+            });
+        }
+
+        [Theory]
+        [InlineData(400, 600, new[] { 300, 500 }, new[] { 1, 2 })]
+        [InlineData(400, 600, new[] { 500, 700 }, new[] { 1, 2 })]
+        [InlineData(400, 600, new[] { 500, 450 }, new[] { 1, 2 })]
+        [InlineData(400, 600, new[] { 500, 500 }, new[] { 1, 2 })]
+        [InlineData(400, 600, new[] { 500 }, new[] { 1, 2 })]
+        [InlineData(600, 400, new int[0], new int[0])]
+        public void PitchSpanThatIsNoSpanRefusesTheBatch(int from, int to, int[] xs, int[] ys) {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, pianoRoll => {
+                PitchCurve(project, first, 0, 1915, 7);
+                var was = Points(first);
+                var notes = first.notes.ToArray();
+                var note = notes[1];
+                var request = JsonSerializer.Serialize(new[] { new {
+                    track = 0, group = EmbeddedNoteEdits.Id(first), offset = first.position,
+                    before = new[] { new { position = note.position, duration = note.duration, tone = note.tone, lyric = note.lyric } },
+                    after = new[] { new { position = note.position, duration = note.duration, tone = note.tone + 2, lyric = note.lyric, from = 0 } },
+                    pitch = new[] { new { from, to, xs, ys } }
+                } });
+                Assert.Equal("bad-request", EmbeddedNoteEdits.Apply(project, request));
+                Assert.Equal(notes, first.notes.ToArray());
+                Assert.Equal(was, Points(first));
+            });
+        }
+
         static void Seek(int tick) {
             DocManager.Inst.ExecuteCmd(new SeekPlayPosTickNotification(tick));
             HeadlessUi.Flush();

@@ -55,6 +55,34 @@ namespace OpenUtau.Test.App {
         }
 
         [Fact]
+        public void SnapshotWithStatesGivesThatTracksPitchCurveByPart() {
+            var project = OpenUtau.Core.Format.Ustx.Create();
+            project.tracks.Add(new UTrack(project) { TrackNo = 1 });
+            foreach (var track in new[] { 0, 1 }) {
+                var part = new UVoicePart { trackNo = track, position = 960 };
+                part.notes.Add(project.CreateNote(60, 0, 480));
+                var curve = new UCurve(project.expressions[OpenUtau.Core.Format.Ustx.PITD]);
+                curve.xs.AddRange(new[] { 0, 5 });
+                curve.ys.AddRange(new[] { 40 + track, -3 });
+                part.curves.Add(curve);
+                project.parts.Add(part);
+            }
+            project.parts.Add(new UVoicePart { trackNo = 1, position = 4800 });
+            JsonElement[] references(string snapshot) {
+                using var read = JsonDocument.Parse(snapshot);
+                return read.RootElement.GetProperty("references").EnumerateArray().Select(r => r.Clone()).ToArray();
+            }
+            Assert.All(references(EmbeddedNoteEdits.Snapshot(project)), r => Assert.False(r.TryGetProperty("pitch", out _)));
+            var asked = references(EmbeddedNoteEdits.Snapshot(project, statesOf: 1));
+            Assert.False(asked[0].TryGetProperty("pitch", out _));
+            int[] numbers(JsonElement r, string name) => r.GetProperty("pitch").GetProperty(name).EnumerateArray().Select(n => n.GetInt32()).ToArray();
+            Assert.Equal(new[] { 0, 5 }, numbers(asked[1], "xs"));
+            Assert.Equal(new[] { 41, -3 }, numbers(asked[1], "ys"));
+            Assert.Empty(numbers(asked[2], "xs"));
+            Assert.Empty(numbers(asked[2], "ys"));
+        }
+
+        [Fact]
         public void RangeReadsLyricsAtAbsoluteTicksAcrossParts() {
             var project = OpenUtau.Core.Format.Ustx.Create();
             var part = new UVoicePart { trackNo = 0, position = 1920 };

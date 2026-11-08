@@ -819,7 +819,8 @@ namespace OpenUtau.App.Embedding {
             SendNoteText(function, context, EmbeddedNoteEdits.Snapshot(DocManager.Inst.Project, n => selection?.Contains(n) == true));
         });
 
-        // As ReadNoteEdits, with each note of the track also giving its state, which an edit to ApplyNoteEdits can bring it back from.
+        // As ReadNoteEdits, with each note of the track also giving its state and each of its parts its pitch deviation curve,
+        // which an edit to ApplyNoteEdits can bring them back from.
         [UnmanagedCallersOnly]
         public static int ReadNoteStates(int track, IntPtr function, IntPtr context) => Guard("read notes' states", () => {
             if (!Usable || !Dispatcher.UIThread.CheckAccess()) throw new InvalidOperationException("The piano roll isn't ready");
