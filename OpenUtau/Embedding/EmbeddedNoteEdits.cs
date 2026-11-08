@@ -82,9 +82,11 @@ namespace OpenUtau.App.Embedding {
             return mark.ToString("x16");
         }
         // The SVP importer gives the host's notes transitions of 40 ms either side of their start, as a new note has by
-        // default, and no vibrato. A note with other pitch points or with vibrato was tuned since.
+        // default, and no vibrato. A note with other pitch points or with vibrato was tuned since. A snapped note's first
+        // point starts at the previous note's tone, which UNote.Validate sets.
         static bool Tuned(UNote note) => note.vibrato.length > 0 || !note.pitch.snapFirst || note.pitch.data.Count != 2
-            || note.pitch.data.Zip(new[] { -40f, 40f }).Any(p => p.First.X != p.Second || p.First.Y != 0 || p.First.shape != PitchPointShape.io);
+            || note.pitch.data.Zip(new[] { -40f, 40f }).Select((p, i) => p.First.X != p.Second || (i > 0 && p.First.Y != 0)
+                || p.First.shape != PitchPointShape.io).Any(changed => changed);
         /// <summary>Gives each voice part of a project imported for the host the mark of its pitch curve.</summary>
         public static void MarkPitch(UProject project) {
             foreach (var part in project.parts.OfType<UVoicePart>()) {

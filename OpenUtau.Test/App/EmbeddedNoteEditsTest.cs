@@ -129,14 +129,16 @@ namespace OpenUtau.Test.App {
         public void SnapshotWithStatesSaysWhichNotesHaveTheirOwnTransitionsOrVibrato() {
             var project = OpenUtau.Core.Format.Ustx.Create();
             var part = new UVoicePart { trackNo = 0, position = 0 };
-            var notes = Enumerable.Range(0, 5).Select(i => project.CreateNote(60, i * 480, 480)).ToArray();
+            var notes = Enumerable.Range(0, 6).Select(i => project.CreateNote(60, i * 480, 480)).ToArray();
             notes[1].vibrato.length = 50;
             notes[2].pitch.data[1].X = 60;
-            notes[3].pitch.data[0].Y = 5;
+            notes[3].pitch.data[1].Y = 5;
             notes[4].pitch.snapFirst = false;
+            // OpenUtau starts a snapped note's transition at the previous note's tone.
+            notes[5].pitch.data[0].Y = -20;
             foreach (var note in notes) part.notes.Add(note);
             project.parts.Add(part);
-            Assert.Equal(new[] { false, true, true, true, true }, Tuned(project, 0));
+            Assert.Equal(new[] { false, true, true, true, true, false }, Tuned(project, 0));
         }
 
         [Fact]
