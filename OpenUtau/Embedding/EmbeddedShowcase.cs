@@ -211,7 +211,14 @@ namespace OpenUtau.App.Embedding {
             double width = Math.Max(1.2, pixels / 320), most = Math.Max(1.2, pixels / 240);
             double left, right;
             double? centre;
-            if (Get("scroll") == "phrases") {
+            // Under another editor, the host sends the times that editor shows above the roll's edges, so each moment
+            // sits under the same moment there and the playheads line up. The roll still centres its own pitches.
+            var window = Get("window").Split(':');
+            if (window.Length == 2) {
+                left = Number(window[0]);
+                right = Number(window[1]);
+                centre = Get("scroll") == "phrases" ? Centre(track, left, right) : Centre(track, seconds - 1, seconds + 4);
+            } else if (Get("scroll") == "phrases") {
                 var lines = Get("lines");
                 if (frameTrack != track || frameLines != lines || Math.Abs(frameWidth - width) > 0.05) frame = null;
                 frameTrack = track; frameLines = lines; frameWidth = width;
