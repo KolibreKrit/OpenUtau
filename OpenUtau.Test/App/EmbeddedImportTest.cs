@@ -63,6 +63,23 @@ namespace OpenUtau.Test.App {
         }
 
         [Fact]
+        public void ImportMarksEachPartsPitchCurveSoTheUstxLoadsWithItUndrawnUntilItChanges() {
+            var source = Write("song.svp", Svp.Replace("{\"uuid\":\"lead\",\"name\":\"main\",",
+                "{\"uuid\":\"lead\",\"name\":\"main\",\"parameters\":{\"pitchDelta\":{\"mode\":\"linear\",\"points\":[0,0.0,705600000,50.0]}},"));
+            var destination = Path.Combine(folder, "song.ustx");
+
+            EmbeddedHost.Import(source, destination);
+
+            var project = Ustx.Load(destination);
+            var lead = project.parts.OfType<UVoicePart>().First(part => part.trackNo == 0);
+            Assert.Contains(lead.curves.Single(c => c.abbr == Ustx.PITD).ys, y => y != 0);
+            Assert.All(EmbeddedNoteEditsTest.Drawn(project, 0), Assert.False);
+            Assert.All(EmbeddedNoteEditsTest.Tuned(project, 0), Assert.False);
+            lead.curves.Single(c => c.abbr == Ustx.PITD).ys[0] += 1;
+            Assert.All(EmbeddedNoteEditsTest.Drawn(project, 0), Assert.True);
+        }
+
+        [Fact]
         public void ImportLeavesADestinationThatExistsAsItWas() {
             var source = Write("song.svp", Svp);
             var destination = Write("song.ustx", "mine");
