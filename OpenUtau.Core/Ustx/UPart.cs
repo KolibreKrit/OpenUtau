@@ -48,6 +48,10 @@ namespace OpenUtau.Core.Ustx {
         public List<UCurve> curves = new List<UCurve>();
         [YamlMember(Order = 102)]
         public List<UMaskedCurve> maskedCurves = new List<UMaskedCurve>();
+        // The embedded fork: a mark of the pitch deviation curve as the host application's import or its edits last left
+        // it, which tells the host whether someone has changed the curve since. Nothing where the host never gave one.
+        [YamlMember(Order = 103)]
+        public string? hostPitch;
 
         [YamlIgnore] public List<UPhoneme> phonemes = new List<UPhoneme>();
         [YamlIgnore] public int phonemesRevision = 0;
@@ -427,6 +431,7 @@ namespace OpenUtau.Core.Ustx {
                 notes = new SortedSet<UNote>(notes.Select(note => note.Clone())),
                 curves = curves.Select(c => c.Clone()).ToList(),
                 maskedCurves = maskedCurves.Select(c => c.Clone()).ToList(),
+                hostPitch = hostPitch,
                 Duration = Duration,
             };
         }

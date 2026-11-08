@@ -82,6 +82,53 @@ namespace OpenUtau.Test.App {
             Assert.Empty(numbers(asked[2], "ys"));
         }
 
+        internal static bool[] Drawn(UProject project, int track) {
+            using var read = JsonDocument.Parse(EmbeddedNoteEdits.Snapshot(project, statesOf: track));
+            return read.RootElement.GetProperty("references").EnumerateArray().Where(r => r.GetProperty("track").GetInt32() == track)
+                .Select(r => r.GetProperty("pitch").GetProperty("drawn").GetBoolean()).ToArray();
+        }
+
+        internal static bool[] Tuned(UProject project, int track) {
+            using var read = JsonDocument.Parse(EmbeddedNoteEdits.Snapshot(project, statesOf: track));
+            return read.RootElement.GetProperty("notes").EnumerateArray().Where(n => n.GetProperty("track").GetInt32() == track)
+                .Select(n => n.GetProperty("tuned").GetBoolean()).ToArray();
+        }
+
+        [Fact]
+        public void SnapshotWithStatesSaysWhetherACurveChangedSinceItWasMarked() {
+            var project = OpenUtau.Core.Format.Ustx.Create();
+            var part = new UVoicePart { trackNo = 0, position = 0 };
+            var curve = new UCurve(project.expressions[OpenUtau.Core.Format.Ustx.PITD]);
+            curve.xs.AddRange(new[] { 0, 5 });
+            curve.ys.AddRange(new[] { 40, -3 });
+            part.curves.Add(curve);
+            project.parts.Add(part);
+            Assert.Equal(new[] { true }, Drawn(project, 0));
+            EmbeddedNoteEdits.MarkPitch(project);
+            Assert.Equal(new[] { false }, Drawn(project, 0));
+            curve.ys[1] = -4;
+            Assert.Equal(new[] { true }, Drawn(project, 0));
+            curve.ys[1] = -3;
+            Assert.Equal(new[] { false }, Drawn(project, 0));
+            curve.xs.Add(10);
+            curve.ys.Add(0);
+            Assert.Equal(new[] { true }, Drawn(project, 0));
+        }
+
+        [Fact]
+        public void SnapshotWithStatesSaysWhichNotesHaveTheirOwnTransitionsOrVibrato() {
+            var project = OpenUtau.Core.Format.Ustx.Create();
+            var part = new UVoicePart { trackNo = 0, position = 0 };
+            var notes = Enumerable.Range(0, 5).Select(i => project.CreateNote(60, i * 480, 480)).ToArray();
+            notes[1].vibrato.length = 50;
+            notes[2].pitch.data[1].X = 60;
+            notes[3].pitch.data[0].Y = 5;
+            notes[4].pitch.snapFirst = false;
+            foreach (var note in notes) part.notes.Add(note);
+            project.parts.Add(part);
+            Assert.Equal(new[] { false, true, true, true, true }, Tuned(project, 0));
+        }
+
         [Fact]
         public void RangeReadsLyricsAtAbsoluteTicksAcrossParts() {
             var project = OpenUtau.Core.Format.Ustx.Create();

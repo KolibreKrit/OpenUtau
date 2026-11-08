@@ -473,8 +473,10 @@ namespace OpenUtau.App.Embedding {
             // The phonemizer would answer the importer's requests through the open project.
             var project = DocManager.Inst.ReadWithoutPhonemizing(() => Core.Format.Formats.ReadProject(new[] { source }))
                 ?? throw new InvalidDataException($"No project in \"{source}\"");
-            if (Path.GetExtension(source).Equals(".svp", StringComparison.OrdinalIgnoreCase))
+            if (Path.GetExtension(source).Equals(".svp", StringComparison.OrdinalIgnoreCase)) {
                 ImportSingers.Select(project, File.ReadAllText(source));
+                EmbeddedNoteEdits.MarkPitch(project);
+            }
             project.ustxVersion = Core.Format.Ustx.kUstxVersion;
             project.FilePath = destination;
             project.BeforeSave();
