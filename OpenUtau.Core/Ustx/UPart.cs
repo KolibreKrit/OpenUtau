@@ -212,6 +212,8 @@ namespace OpenUtau.Core.Ustx {
 
                 var request = new PhonemizerRequest() {
                     singer = track.Singer,
+                    project = project,
+                    track = track,
                     part = this,
                     timestamp = DateTime.Now.ToFileTimeUtc(),
                     noteIndexes = noteIndexes.ToArray(),

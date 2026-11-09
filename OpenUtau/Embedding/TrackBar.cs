@@ -205,6 +205,10 @@ namespace OpenUtau.App.Embedding {
                 flyout.Closed += (_, _) => { SingerMenuOpen = false; DocManager.Inst.RemoveSubscriber(singers); };
                 content.FitToScreen(anchor);
                 flyout.ShowAt(anchor);
+                // Opening puts the keyboard on the footer's first button, and the flyout moves it to its search box
+                // only on a later dispatcher turn. A host that presses Return once the menu reports open would
+                // click that button.
+                content.FindControl<TextBox>("SearchBox")?.Focus();
             } catch (Exception e) {
                 DocManager.Inst.ExecuteCmd(new ErrorMessageNotification(e));
             }

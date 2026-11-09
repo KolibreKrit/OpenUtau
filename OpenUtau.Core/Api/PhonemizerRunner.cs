@@ -11,6 +11,9 @@ using Serilog;
 namespace OpenUtau.Api {
     internal class PhonemizerRequest {
         public USinger singer;
+        // The part's own, which aren't the open project's while a project that is being loaded validates.
+        public UProject project;
+        public UTrack track;
         public UVoicePart part;
         public long timestamp;
         public int[] noteIndexes;
@@ -142,7 +145,7 @@ namespace OpenUtau.Api {
                 p.SetTiming(request.timeAxis);
                 if (p.SetUpException == null) {
                     try {
-                        p.SetUp(notes, DocManager.Inst.Project, DocManager.Inst.Project.tracks[request.part.trackNo]);
+                        p.SetUp(notes, request.project, request.track);
                     } catch (Exception e) {
                         Log.Error(e, $"phonemizer failed to setup.");
                         p.SetUpException = e;

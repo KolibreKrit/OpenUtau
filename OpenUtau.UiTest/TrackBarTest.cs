@@ -150,6 +150,23 @@ namespace OpenUtau.UiTest {
         }
 
         [Fact]
+        public void ReturnAsSoonAsTheAddSingerMenuReportsOpenAddsItsFirstSinger() {
+            var project = Project();
+            WithBar(project, (bar, _) => WithInstalled(new Singer("Soprano"), () => {
+                bar.ShowAddSingerMenu();
+                Assert.True(TrackBar.SingerMenuOpen);
+                // Straight to the control that has the keyboard, as a host's key arrives before OpenUtau's waiting
+                // jobs. The headless window's KeyPress would run them first.
+                var focused = (InputElement)TopLevel.GetTopLevel(bar)!.FocusManager!.GetFocusedElement()!;
+                focused.RaiseEvent(new KeyEventArgs { RoutedEvent = InputElement.KeyDownEvent, Key = Key.Enter });
+                HeadlessUi.Flush();
+                Assert.False(TrackBar.SingerMenuOpen);
+                Assert.Equal(3, project.tracks.Count);
+                Assert.True(project.tracks[2].Singer.Found);
+            }));
+        }
+
+        [Fact]
         public void AddSingerCreatesAnEmptyPartAndUndoRemovesTheWholeSinger() {
             var project = Project();
             var soprano = new Singer("Soprano");
