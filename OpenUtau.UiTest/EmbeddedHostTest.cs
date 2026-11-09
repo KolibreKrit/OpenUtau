@@ -485,6 +485,26 @@ namespace OpenUtau.UiTest {
         }
 
         [Fact]
+        public void ShowcaseShowsTheHostsWindowAcrossTheRoll() {
+            var project = Project(out var first, out _);
+            WithPianoRoll(project, first, roll => {
+                var stage = new EmbeddedShowcase(roll);
+                stage.Begin(false);
+                const string plan = "steer=1\tscroll=phrases\tpitch=1\tbar=2\tshown=1\tmiddle=0.5\tswitches=0:1\tlines=1 0:0.5 0.5:1\twindow=0.25:3.25";
+                stage.Update(plan, 0.2);
+                var vm = roll.ViewModel.NotesViewModel;
+                var axis = project.timeAxis;
+                double Seconds(double ticks) => axis.TickPosToMsPos(ticks) / 1000;
+                double offset = vm.Part!.position + vm.TickOffset;
+                Assert.Equal(0.25, Seconds(offset), 3);
+                Assert.Equal(3.25, Seconds(offset + vm.ViewportTicks), 3);
+                stage.Update(plan, 0.7);
+                Assert.Equal(offset, vm.Part.position + vm.TickOffset, 3);
+                stage.End();
+            });
+        }
+
+        [Fact]
         public void ShowcaseHidesChromeAndRestoresItsLayout() {
             var project = Project(out var first, out _);
             WithPianoRoll(project, first, roll => {
